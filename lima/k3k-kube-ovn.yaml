@@ -4,8 +4,7 @@
 #   limactl start k3k-kube-ovn
 #   limactl shell k3k-kube-ovn
 #
-# Rancher will be available at: https://rancher.k3k-kube-ovn.localhost
-# (change the instance name above if you want a different hostname)
+
 
 images:
   - location: https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.x86_64-Cloud.qcow2
@@ -22,16 +21,8 @@ mounts:
   - location: "~"
     writable: false
 
-# Forward 80 and 443 from the guest to the Mac host on 127.0.0.1
-# *.localhost resolves to 127.0.0.1 on macOS (RFC 6761)
+# Forward Kubernetes API (optional, for direct kubectl access from Mac)
 portForwards:
-  - guestPort: 443
-    hostPort: 443
-    hostIP: "127.0.0.1"
-  - guestPort: 80
-    hostPort: 80
-    hostIP: "127.0.0.1"
-  # Kubernetes API (optional, for direct kubectl access)
   - guestPort: 6443
     hostPort: 6443
     hostIP: "127.0.0.1"
@@ -60,12 +51,12 @@ provision:
       sysctl -w net.ipv4.ip_forward=1
       echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/90-rke2-ip-forward.conf
 
-      # Pre-configure RKE2 to use Traefik and set CNI to none (we will install Kube-OVN via Helm)
+      # Pre-configure RKE2 to set CNI to none (we will install Kube-OVN via Helm) and disable default ingress-nginx
       mkdir -p /etc/rancher/rke2
       cat <<EOF > /etc/rancher/rke2/config.yaml
       cni: none
-      ingress-controller:
-        - traefik
+      disable:
+        - rke2-ingress-nginx
       EOF
 
       # Install RKE2
@@ -149,14 +140,6 @@ provision:
       echo "Waiting for nodes to be Ready..."
       kubectl wait --for=condition=Ready node --all --timeout=300s
 
-      # 8. Wait for RKE2's built-in Traefik ingress controller DaemonSet to be created and fully rolled out.
-      echo "Waiting for RKE2 Traefik ingress controller DaemonSet to be created..."
-      until kubectl -n kube-system get daemonset/rke2-traefik &>/dev/null; do
-        sleep 5
-      done
-
-      echo "Waiting for RKE2 Traefik ingress controller to be ready..."
-      kubectl -n kube-system rollout status daemonset/rke2-traefik --timeout=300s
 
       # Install cert-manager via RKE2 auto-deploy manifests
       if ! [ -f /var/lib/rancher/rke2/server/manifests/cert-manager.yaml ]; then
@@ -206,12 +189,7 @@ provision:
         cp "${MANIFESTS_DIR}/k3k/cluster.yaml" /var/lib/rancher/rke2/server/manifests/k3k-cluster.yaml
       fi
 
-      # 5. Copy and configure the Rancher Prime manifest
-      if [ -f "${MANIFESTS_DIR}/rancher/rancher-helmchart.yaml" ]; then
-        echo "Copying and configuring Rancher Prime manifest from mount..."
-        RANCHER_HOSTNAME="rancher.$(hostname -s).localhost"
-        sed "s/__HOSTNAME__/${RANCHER_HOSTNAME}/g" "${MANIFESTS_DIR}/rancher/rancher-helmchart.yaml" > /var/lib/rancher/rke2/server/manifests/rancher-helmchart.yaml
-      fi
+
       echo "Sync of manifests from mount successfully completed."
 
       echo "Waiting for k3k namespace and deployments to be available..."
@@ -252,7 +230,15 @@ provision:
       # Add RKE2 bins to PATH
       grep -q 'rancher/rke2/bin' ~/.bashrc || \
         echo 'export PATH=$PATH:/var/lib/rancher/rke2/bin' >> ~/.bashrc
+
+      # Fallback TERM if terminfo is missing (e.g., for Ghostty)
+      grep -q 'ghostty' ~/.bashrc || cat <<'BASHRC' >> ~/.bashrc
+      if [[ "$TERM" == *"ghostty"* ]] && ! infocmp "$TERM" &>/dev/null; then
+        export TERM=xterm-256color
+      fi
+      BASHRC
       EOF
+
 
 
 

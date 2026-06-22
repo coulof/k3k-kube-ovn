@@ -26,10 +26,10 @@ This repository sets up **Kube-OVN** as the primary Container Network Interface 
 
 ### Key Architectural Concepts
 
-1. **Host-Level CNI Control:** RKE2 is configured with `cni: none` [lima/k3k-kube-ovn.yaml:L66](lima/k3k-kube-ovn.yaml#L66). Kube-OVN is installed on the host RKE2 cluster to manage physical OVS bridges and all core networking.
+1. **Host-Level CNI Control:** RKE2 is configured with `cni: none` [lima/k3k-kube-ovn.yaml:L57](lima/k3k-kube-ovn.yaml#L57). Kube-OVN is installed on the host RKE2 cluster to manage physical OVS bridges and all core networking.
 2. **Namespace-to-Subnet Binding:** A custom Kube-OVN `Subnet` [manifests/kube-ovn/subnet.yaml](manifests/kube-ovn/subnet.yaml) is defined on the host with CIDR `10.16.0.0/16` and is annotated directly to bind with the virtual cluster's namespace (`k3k-kube-ovn-cluster`) [manifests/k3k/namespace.yaml](manifests/k3k/namespace.yaml). Workloads scheduled inside the virtual cluster are translated to the host and automatically assigned IPs from this isolated range.
 3. **Kubelet API Communication:** The virtual cluster's `k3k-kubelet` agent must be able to talk to the host cluster's Kubernetes API server IP (`10.43.0.1:443`). To unblock this traffic, the subnet has `private: false` (strict isolation disabled) [manifests/kube-ovn/subnet.yaml:L12](manifests/kube-ovn/subnet.yaml#L12), preventing a container creation deadlock.
-4. **Declarative & Single Source of Truth:** The Lima configuration mounts the host directory read-only [lima/k3k-kube-ovn.yaml:L23](lima/k3k-kube-ovn.yaml#L23). On boot, the provisioning scripts automatically copy manifests from the mounted path to `/var/lib/rancher/rke2/server/manifests/` [lima/k3k-kube-ovn.yaml:L183-L215](lima/k3k-kube-ovn.yaml#L183-L215) to be natively deployed by RKE2, removing any double-maintenance overhead.
+4. **Declarative & Single Source of Truth:** The Lima configuration mounts the host directory read-only [lima/k3k-kube-ovn.yaml:L21-L22](lima/k3k-kube-ovn.yaml#L21-L22). On boot, the provisioning scripts automatically copy manifests from the mounted path to `/var/lib/rancher/rke2/server/manifests/` [lima/k3k-kube-ovn.yaml:L158-L193](lima/k3k-kube-ovn.yaml#L158-L193) to be natively deployed by RKE2, removing any double-maintenance overhead.
 
 ### CNI Bootstrapping Flow & Deadlock Resolution
 
@@ -50,15 +50,15 @@ sequenceDiagram
     OVS->>RKE2: Provisions virtual OVS interfaces & bridges
     Note over RKE2: Nodes transition to Ready<br/>Pod network is active
     Guest->>Deploy: Syncs manifests to /server/manifests/
-    Deploy->>RKE2: Deploys cert-manager, k3k, Rancher Prime, and custom subnets
+    Deploy->>RKE2: Deploys cert-manager, k3k, and custom subnets
 ```
 
-1. **The Chicken-and-Egg Deadlock:** RKE2 starts with `cni: none` [lima/k3k-kube-ovn.yaml:L66](lima/k3k-kube-ovn.yaml#L66). Because there is no active CNI, nodes remain in `NotReady` status. Standard controllers (including RKE2's built-in manifest processor) schedule Helm chart deployments as standard Kubernetes jobs/pods. If Kube-OVN were defined declaratively in the manifests directory, its installation job would wait infinitely for a network to run—creating a circular dependency.
+1. **The Chicken-and-Egg Deadlock:** RKE2 starts with `cni: none` [lima/k3k-kube-ovn.yaml:L57](lima/k3k-kube-ovn.yaml#L57). Because there is no active CNI, nodes remain in `NotReady` status. Standard controllers (including RKE2's built-in manifest processor) schedule Helm chart deployments as standard Kubernetes jobs/pods. If Kube-OVN were defined declaratively in the manifests directory, its installation job would wait infinitely for a network to run—creating a circular dependency.
 2. **The Resolution:** 
-   - First, the host system loads the required host-level `openvswitch` kernel module [lima/k3k-kube-ovn.yaml:L104](lima/k3k-kube-ovn.yaml#L104).
-   - Second, the provisioning script imperatively installs the Helm CLI and runs `helm install kube-ovn` [lima/k3k-kube-ovn.yaml:L133](lima/k3k-kube-ovn.yaml#L133) in the host network space.
-   - Once Kube-OVN is running, the host nodes become `Ready` [lima/k3k-kube-ovn.yaml:L150](lima/k3k-kube-ovn.yaml#L150).
-   - Finally, the project directory is located on the read-only host mount, and all declarative manifests (for cert-manager, k3k, subnet annotations, and Rancher Prime) are copied over to RKE2's manifest directory [lima/k3k-kube-ovn.yaml:L183-L215](lima/k3k-kube-ovn.yaml#L183-L215). They are then natively executed by RKE2's built-in deploy controller.
+   - First, the host system loads the required host-level `openvswitch` kernel module [lima/k3k-kube-ovn.yaml:L95](lima/k3k-kube-ovn.yaml#L95).
+   - Second, the provisioning script imperatively installs the Helm CLI and runs `helm install kube-ovn` [lima/k3k-kube-ovn.yaml:L124](lima/k3k-kube-ovn.yaml#L124) in the host network space.
+   - Once Kube-OVN is running, the host nodes become `Ready` [lima/k3k-kube-ovn.yaml:L140](lima/k3k-kube-ovn.yaml#L140).
+   - Finally, the project directory is located on the read-only host mount, and all declarative manifests (for cert-manager, k3k, and subnet annotations) are copied over to RKE2's manifest directory [lima/k3k-kube-ovn.yaml:L158-L193](lima/k3k-kube-ovn.yaml#L158-L193). They are then natively executed by RKE2's built-in deploy controller.
 
 ---
 
@@ -70,7 +70,6 @@ sequenceDiagram
 | **RKE2** | latest | Base host Kubernetes distribution |
 | **k3k** | latest | Lightweight virtual Kubernetes clusters |
 | **Kube-OVN** | `v1.16.2` | Advanced CNI and subnet mapping |
-| **Rancher Prime** | latest | Enterprise Kubernetes management platform |
 
 ---
 
@@ -87,10 +86,8 @@ sequenceDiagram
     │   ├── k3k-helmchart.yaml    # Declarative HelmChart for k3k
     │   ├── namespace.yaml        # Namespace with Kube-OVN subnet annotations
     │   └── cluster.yaml          # k3k virtual cluster spec (shared mode)
-    ├── kube-ovn/
-    │   └── subnet.yaml           # Host Kube-OVN subnet mapped to virtual namespace
-    └── rancher/
-        └── rancher-helmchart.yaml # Declarative HelmChart for Rancher Prime
+    └── kube-ovn/
+        └── subnet.yaml           # Host Kube-OVN subnet mapped to virtual namespace
 ```
 
 ---
@@ -136,14 +133,6 @@ kubectl get pods -A
 
 Expected output:
 * Kube-OVN, cert-manager, and k3k pods are in `Running` state in `kube-system`, `cert-manager`, and `k3k-system` namespaces.
-
-### 3. Access Rancher Prime 🤠
-
-Rancher Prime is automatically deployed and exposed via the Traefik ingress controller on the host RKE2 cluster.
-
-* **Rancher URL:** [https://rancher.lima-k3k-kube-ovn.localhost](https://rancher.lima-k3k-kube-ovn.localhost)
-  *(Note: Port 443 is forwarded from the guest to the Mac host [lima/k3k-kube-ovn.yaml:L28-L30](lima/k3k-kube-ovn.yaml#L28-L30), and standard `*.localhost` domains automatically resolve to `127.0.0.1` on macOS (RFC 6761). This allows you to access the Rancher UI directly in your browser without extra host mapping).*
-* **Bootstrap Password:** `admin` (defined inside the inline configuration [manifests/rancher/rancher-helmchart.yaml:L13](manifests/rancher/rancher-helmchart.yaml#L13)).
 
 ---
 
