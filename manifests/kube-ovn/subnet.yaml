@@ -1,0 +1,13 @@
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: k3k-kube-ovn-subnet
+spec:
+  cidrBlock: "10.16.0.0/16"
+  gateway: "10.16.0.1"
+  excludeIps:
+    - "10.16.0.1"
+  namespaces:
+    - "k3k-kube-ovn-cluster"
+  private: true
+  vlan: ""

@@ -8,10 +8,10 @@
 # (change the instance name above if you want a different hostname)
 
 images:
-  - location: "https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.aarch64-Cloud.qcow2"
-    arch: "aarch64"
-  - location: "https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.x86_64-Cloud.qcow2"
-    arch: "x86_64"
+  - location: https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.x86_64-Cloud.qcow2
+    arch: x86_64
+  - location: https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.aarch64-Cloud.qcow2
+    arch: aarch64
 
 cpus: 4
 memory: "8GiB"
@@ -37,17 +37,45 @@ provision:
       #!/bin/bash
       set -eux -o pipefail
 
+      # Disable firewalld on SUSE/openSUSE to prevent CNI routing and port conflicts
+      if systemctl is-enabled --quiet firewalld &>/dev/null || systemctl is-active --quiet firewalld &>/dev/null; then
+        echo "Disabling firewalld..."
+        systemctl disable --now firewalld || true
+      fi
+
+      # Ensure IP forwarding is enabled
+      sysctl -w net.ipv4.ip_forward=1
+      echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/90-rke2-ip-forward.conf
+
+      # Pre-configure RKE2 to use Traefik and set CNI to none (we will install Kube-OVN via Helm)
+      mkdir -p /etc/rancher/rke2
+      cat <<EOF > /etc/rancher/rke2/config.yaml
+      cni: none
+      ingress-controller:
+        - traefik
+      EOF
+
       # Install RKE2
       if ! command -v rke2 &>/dev/null; then
+        echo "Installing RKE2..."
         curl -sfL https://get.rke2.io | sh -
         systemctl enable rke2-server --now
       fi
 
-      # Wait for RKE2 to be ready
+      # Wait for RKE2 kubectl binary to be available
+      echo "Waiting for RKE2 kubectl binary..."
+      until [ -f /var/lib/rancher/rke2/bin/kubectl ]; do
+        sleep 5
+      done
+
+      # Wait for RKE2 to be ready (API server responsive, though nodes will be NotReady initially without CNI)
       export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
       export PATH=$PATH:/var/lib/rancher/rke2/bin
-      until kubectl get nodes &>/dev/null; do sleep 5; done
-      kubectl wait --for=condition=Ready node --all --timeout=300s
+      
+      echo "Waiting for Kubernetes API server..."
+      until kubectl get nodes &>/dev/null; do
+        sleep 5
+      done
 
   - mode: system
     script: |
@@ -57,40 +85,115 @@ provision:
       export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
       export PATH=$PATH:/var/lib/rancher/rke2/bin
 
-      # Install Helm
+      # 1. Load openvswitch kernel module on the host
+      if ! lsmod | grep -q openvswitch; then
+        echo "Loading openvswitch kernel module..."
+        modprobe openvswitch
+      fi
+      echo "openvswitch" > /etc/modules-load.d/openvswitch.conf
+
+      # 2. Install Helm
       if ! command -v helm &>/dev/null; then
+        echo "Installing Helm..."
         curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
       fi
 
-      # Install cert-manager
-      if ! kubectl get ns cert-manager &>/dev/null; then
-        kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
-        kubectl -n cert-manager wait --for=condition=Available deploy --all --timeout=300s
+      # 3. Label RKE2 host node as Kube-OVN master
+      echo "Labeling master node..."
+      kubectl label node --all kube-ovn/role=master --overwrite
+
+      # 4. Get master node IP dynamically
+      MASTER_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+      echo "Master IP detected: ${MASTER_IP}"
+
+      # 5. Install Kube-OVN on the host RKE2 cluster
+      if ! helm -n kube-system status kube-ovn &>/dev/null; then
+        echo "Installing Kube-OVN via Helm..."
+        helm repo add kubeovn https://kubeovn.github.io/kube-ovn/
+        helm repo update
+        helm install kube-ovn kubeovn/kube-ovn \
+          --namespace kube-system \
+          --set ipv4.POD_CIDR="10.42.0.0/16" \
+          --set ipv4.POD_GATEWAY="10.42.0.1" \
+          --set ipv4.SVC_CIDR="10.43.0.0/16" \
+          --set ipv4.JOIN_CIDR="100.64.0.0/16" \
+          --set MASTER_NODES="${MASTER_IP}"
       fi
 
-      # Install Rancher
-      # The hostname uses the Lima instance name: rancher.<instance>.localhost
-      if ! kubectl get ns cattle-system &>/dev/null; then
-        helm repo add rancher-stable https://releases.rancher.com/server-charts/stable
-        helm repo update
-        helm install rancher rancher-stable/rancher \
-          --namespace cattle-system --create-namespace \
-          --set hostname=rancher.$(hostname -s).localhost \
-          --set bootstrapPassword=admin \
-          --set replicas=1
+      # 6. Wait for Kube-OVN components to be fully ready
+      echo "Waiting for Kube-OVN components to be ready..."
+      kubectl -n kube-system rollout status deployment/kube-ovn-controller --timeout=300s
+      kubectl -n kube-system rollout status daemonset/kube-ovn-cni --timeout=300s
+      kubectl -n kube-system rollout status daemonset/ovs-ovn --timeout=300s
+
+      # 7. Now wait for nodes to transition to Ready (since CNI is active)
+      echo "Waiting for nodes to be Ready..."
+      kubectl wait --for=condition=Ready node --all --timeout=300s
+
+      # 8. Wait for RKE2's built-in Traefik ingress controller DaemonSet to be created and fully rolled out.
+      echo "Waiting for RKE2 Traefik ingress controller DaemonSet to be created..."
+      until kubectl -n kube-system get daemonset/rke2-traefik &>/dev/null; do
+        sleep 5
+      done
+
+      echo "Waiting for RKE2 Traefik ingress controller to be ready..."
+      kubectl -n kube-system rollout status daemonset/rke2-traefik --timeout=300s
+
+      # Install cert-manager via RKE2 auto-deploy manifests
+      if ! [ -f /var/lib/rancher/rke2/server/manifests/cert-manager.yaml ]; then
+        echo "Downloading cert-manager manifest to RKE2 server manifests directory..."
+        mkdir -p /var/lib/rancher/rke2/server/manifests
+        curl -sSL https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml -o /var/lib/rancher/rke2/server/manifests/cert-manager.yaml
       fi
+
+      echo "Waiting for cert-manager namespace and deployments to be available..."
+      until kubectl get ns cert-manager &>/dev/null; do
+        sleep 5
+      done
+      kubectl -n cert-manager wait --for=condition=Available deploy --all --timeout=300s
+
+      # [DEFERRED] Rancher is not installed at this phase (by user request)
+      # # Install Rancher
+      # # The hostname uses the Lima instance name: rancher.<instance>.localhost
+      # if ! kubectl get ns cattle-system &>/dev/null; then
+      #   echo "Installing Rancher..."
+      #   helm repo add rancher-stable https://releases.rancher.com/server-charts/stable
+      #   helm repo update
+      #   helm install rancher rancher-stable/rancher \
+      #     --namespace cattle-system --create-namespace \
+      #     --set hostname=rancher.$(hostname -s).localhost \
+      #     --set bootstrapPassword=admin \
+      #     --set replicas=1
+      # fi
 
       # Install k3k
       if ! kubectl get ns k3k-system &>/dev/null; then
+        echo "Installing k3k..."
         helm repo add k3k https://rancher.github.io/k3k
         helm repo update
         helm install k3k k3k/k3k \
           --namespace k3k-system --create-namespace
       fi
 
-  - mode: user
+      # Install and configure bash-completion (Best Practice: Static, system-wide generation)
+      if ! rpm -q bash-completion &>/dev/null; then
+        echo "Installing bash-completion..."
+        zypper --non-interactive install -y bash-completion
+      fi
+
+      echo "Generating kubectl and helm system-wide bash completions..."
+      mkdir -p /usr/share/bash-completion/completions
+      /var/lib/rancher/rke2/bin/kubectl completion bash > /usr/share/bash-completion/completions/kubectl
+      /usr/local/bin/helm completion bash > /usr/share/bash-completion/completions/helm
+
+
+  - mode: system
     script: |
       #!/bin/bash
+      set -eux -o pipefail
+
+      # Run user convenience steps as the 'lima' user to bypass /mnt/lima-cidata permissions
+      sudo -H -u lima bash <<'EOF'
       set -eux -o pipefail
 
       # Convenience: make kubectl available without sudo
@@ -104,6 +207,9 @@ provision:
       # Add RKE2 bins to PATH
       grep -q 'rancher/rke2/bin' ~/.bashrc || \
         echo 'export PATH=$PATH:/var/lib/rancher/rke2/bin' >> ~/.bashrc
+      EOF
+
+
 
 probes:
   - description: "RKE2 is ready"
@@ -120,7 +226,7 @@ probes:
     script: |
       #!/bin/bash
       set -eux -o pipefail
-      if ! timeout 30s bash -c "until /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml get nodes &>/dev/null; do sleep 3; done"; then
+      if ! timeout 30s bash -c "until sudo /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml get nodes &>/dev/null; do sleep 3; done"; then
         echo >&2 "kubectl is not working yet"
         exit 1
       fi

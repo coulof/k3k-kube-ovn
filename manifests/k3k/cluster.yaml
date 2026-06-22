@@ -12,9 +12,8 @@ spec:
   serviceCIDR: "10.96.0.0/12"
   clusterDNS: "10.96.0.10"
   persistence:
-    type: dynamic
-    storageRequestSize: 2Gi
-  # Disable the default k3s CNI so Kube-OVN can take over
+    type: none
+  # Disable the default k3s Flannel CNI; workloads are translated to the host namespace and run on the host's Kube-OVN CNI.
   serverArgs:
     - "--flannel-backend=none"
     - "--disable-network-policy"
