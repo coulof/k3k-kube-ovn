@@ -43,8 +43,7 @@ manifests/
     cluster.yaml            -- k3k virtual Cluster spec (shared mode, CNI-less serverArgs)
   kube-ovn/
     subnet.yaml             -- Host-level Kube-OVN subnet mapped to the guest namespace (private: false)
-    helmchart.yaml          -- Guest-level HelmChart CRD (optional, for tenant control plane)
-    values.yaml             -- Guest-level Kube-OVN values (optional, for tenant control plane)
+    kube-ovn-helmchart.yaml -- Guest-level HelmChart CRD (optional, for tenant control plane)
   rancher/
     rancher-helmchart.yaml  -- HelmChart CRD to auto-deploy Rancher Prime on host RKE2 (dynamic hostname)
 ```

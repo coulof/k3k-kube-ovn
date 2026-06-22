@@ -1,6 +1,6 @@
 # HelmChart CRD for k3s/RKE2 Helm controller auto-deploy
 # Drop this file into /var/lib/rancher/k3s/server/manifests/ on the k3k virtual cluster server
-# or apply it directly: kubectl apply -f helmchart.yaml
+# or apply it directly: kubectl apply -f kube-ovn-helmchart.yaml
 apiVersion: helm.cattle.io/v1
 kind: HelmChart
 metadata:
