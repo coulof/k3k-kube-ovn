@@ -147,8 +147,8 @@ export KUBECONFIG=~/.kube/k3k-kube-ovn.yaml
 # List virtual clusters running on the host
 k3kcli cluster list
 
-# Generate the kubeconfig for the virtual cluster
-k3kcli kubeconfig generate kube-ovn-cluster --namespace k3k-kube-ovn-cluster > ~/.kube/kube-ovn-cluster.yaml
+# Generate the kubeconfig for the virtual cluster (writes to current directory)
+k3kcli kubeconfig generate --name kube-ovn-cluster --namespace k3k-kube-ovn-cluster --config-name kube-ovn-cluster.yaml
 ```
 
 ---
