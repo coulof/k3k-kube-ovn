@@ -113,45 +113,50 @@ rm -f /tmp/kubeconfig-centralized.yaml
 #### Option C: macOS-Native Verification (Using local k3kcli)
 If you have `k3kcli` and `kubectl` installed on macOS, you can manage and verify the virtual cluster directly from your Mac without SSH-ing into the Lima VM (leveraging the forwarded port 6443).
 
+##### 1. Copy Host Kubeconfig & Deploy Resources
+First, copy the unprivileged host kubeconfig from the guest VM to your Mac and apply the centralized gateway manifests:
 ```bash
-# 1. Copy the host RKE2 kubeconfig to your Mac
+# Copy the host RKE2 kubeconfig to your Mac
 limactl copy k3k-kube-ovn:.kube/config-mac /tmp/kubeconfig-host.yaml
 
-# 2. Deploy the centralized gateway resources from your Mac
+# Deploy the centralized gateway resources from your Mac
 KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl apply -f manifests/centralized-gateway-test/namespace.yaml
 KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl apply -f manifests/centralized-gateway-test/subnet.yaml
 KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl apply -f manifests/centralized-gateway-test/cluster.yaml
+```
 
-# 3. Establish a local port-forward on port 7444 to the virtual cluster's API Service
+##### 2. Establish Local Port-Forward
+Since macOS cannot directly route to the RKE2 host cluster's internal `ClusterIP` network (`10.43.0.0/16`), establish a local port-forward to proxy the virtual cluster's API:
+```bash
+# Establish a local port-forward on port 7444 to the virtual cluster's API Service
 KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl port-forward -n k3k-kube-ovn-centralized-cluster svc/k3k-kube-ovn-centralized-cluster-service 7444:443 &
+```
 
-# 4. Generate the centralized virtual cluster kubeconfig using your local k3kcli on macOS
+##### 3. Generate & Configure Virtual Kubeconfig
+Generate the virtual cluster's kubeconfig on your Mac and point it to the local port-forward while allowing insecure TLS:
+```bash
+# Generate the centralized virtual cluster kubeconfig using your local k3kcli on macOS
 KUBECONFIG=/tmp/kubeconfig-host.yaml k3kcli kubeconfig generate --name kube-ovn-centralized-cluster --namespace k3k-kube-ovn-centralized-cluster --config-name kubeconfig-centralized.yaml
 
-# 5. Point the virtual kubeconfig to your local forwarded port & allow insecure TLS
+# Point the virtual kubeconfig to your local forwarded port & allow insecure TLS
 kubectl config set-cluster default --server=https://127.0.0.1:7444 --insecure-skip-tls-verify=true --kubeconfig=kubeconfig-centralized.yaml
+```
 
-# 6. Deploy the test pod inside the virtual cluster from macOS
+##### 4. Deploy & Verify Test Pod inside Virtual Cluster
+Deploy the test pod directly inside the virtual cluster, verify its status and OVN-assigned IP, and run the ping validation tests:
+```bash
+# Deploy the test pod inside the virtual cluster from macOS
 KUBECONFIG=kubeconfig-centralized.yaml kubectl apply -f manifests/centralized-gateway-test/test-pod.yaml
 
-# 7. Check the pod status inside the virtual cluster
+# Check the pod status inside the virtual cluster
 KUBECONFIG=kubeconfig-centralized.yaml kubectl get pods -o wide
 
-# 8. Verify that k3k has translated it to the host and Kube-OVN has assigned the 10.17.x.x IP
+# Verify that k3k has translated it to the host and Kube-OVN has assigned the 10.17.x.x IP
 KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl get pods -n k3k-kube-ovn-centralized-cluster -o wide
 
-# 9. Perform the ping tests from WITHIN the virtual cluster pod
+# Perform the ping tests from WITHIN the virtual cluster pod
 KUBECONFIG=kubeconfig-centralized.yaml kubectl exec -it test-pod-centralized -- ping -c 3 10.43.0.1
 KUBECONFIG=kubeconfig-centralized.yaml kubectl exec -it test-pod-centralized -- ping -c 3 8.8.8.8
-
-# 10. Clean up workloads from macOS
-KUBECONFIG=kubeconfig-centralized.yaml kubectl delete pod test-pod-centralized
-KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl delete -f manifests/centralized-gateway-test/cluster.yaml
-KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl delete -f manifests/centralized-gateway-test/subnet.yaml
-KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl delete -f manifests/centralized-gateway-test/namespace.yaml
-rm -f kubeconfig-centralized.yaml /tmp/kubeconfig-host.yaml
-
-# Note: After verification, remember to stop the background port-forward process (e.g., using 'kill %1' or looking up the job).
 ```
 
 *Expected result for all options: 3 packets transmitted, 3 received, 0% packet loss.*
@@ -159,7 +164,26 @@ rm -f kubeconfig-centralized.yaml /tmp/kubeconfig-host.yaml
 ---
 
 ## Cleanup Test Infrastructure
-After completing the verification, clean up the centralized gateway test suite:
+
+After completing the verification, clean up the centralized gateway test workloads and host infrastructure.
+
+### Option A: From macOS (Host)
+Run these commands from your Mac terminal to remove resources, clean up temporary local files, and terminate the background port-forward process:
+```bash
+# 1. Clean up test workloads and host infrastructure from macOS
+KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl delete -f manifests/centralized-gateway-test/cluster.yaml
+KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl delete -f manifests/centralized-gateway-test/subnet.yaml
+KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl delete -f manifests/centralized-gateway-test/namespace.yaml
+
+# 2. Delete temporary local kubeconfig files
+rm -f kubeconfig-centralized.yaml /tmp/kubeconfig-host.yaml
+
+# 3. Stop the background port-forward process (if running in this session)
+kill %1 || killall kubectl
+```
+
+### Option B: From the VM Shell
+If you performed the verification inside the VM guest shell, run these commands inside the shell:
 ```bash
 kubectl delete -f manifests/centralized-gateway-test/cluster.yaml
 kubectl delete -f manifests/centralized-gateway-test/subnet.yaml
