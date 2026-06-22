@@ -17,6 +17,7 @@ cpus: 4
 memory: "8GiB"
 disk: "40GiB"
 
+mountType: "reverse-sshfs"
 mounts:
   - location: "~"
     writable: false
@@ -40,6 +41,14 @@ provision:
     script: |
       #!/bin/bash
       set -eux -o pipefail
+
+      # Install sshfs to support reverse-sshfs host folder mounts if not present
+      if ! command -v sshfs &>/dev/null; then
+        echo "Installing sshfs..."
+        zypper --non-interactive install -y sshfs
+        echo "Restarting lima-guestagent to establish mounts..."
+        systemctl restart lima-guestagent || true
+      fi
 
       # Disable firewalld on SUSE/openSUSE to prevent CNI routing and port conflicts
       if systemctl is-enabled --quiet firewalld &>/dev/null || systemctl is-active --quiet firewalld &>/dev/null; then
@@ -102,11 +111,17 @@ provision:
         curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
       fi
 
-      # 3. Label RKE2 host node as Kube-OVN master
+      # 3. Wait for at least one host node to register in the API server
+      echo "Waiting for at least one RKE2 host node to register..."
+      until [ -n "$(kubectl get nodes -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)" ]; do
+        sleep 5
+      done
+
+      # 4. Label RKE2 host node as Kube-OVN master
       echo "Labeling master node..."
       kubectl label node --all kube-ovn/role=master --overwrite
 
-      # 4. Get master node IP dynamically
+      # 5. Get master node IP dynamically
       MASTER_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
       echo "Master IP detected: ${MASTER_IP}"
 
