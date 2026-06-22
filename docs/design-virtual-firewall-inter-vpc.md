@@ -416,6 +416,67 @@ Traefik operates at L7 HTTP ingress -- its middleware (WAF via CrowdSec/Coraza, 
 | **3 (open-source, VM-based)** | OPNsense/VyOS VM + fork opnsense-operator (or build custom) | Medium -- VM setup + operator development | Traditional firewall with CRD management layer; operator is a bounded coding project |
 | **4 (manual, lowest effort)** | VyOS/OPNsense VM with manual config (Option A/B/C above) | Low -- just deploy and configure | Works today but no GitOps, no CRD reconciliation |
 
+## How OpenShift Virtualization Solves This Problem
+
+OpenShift Virtualization takes a fundamentally different approach: rather than inserting a firewall between networks, it builds **hard network isolation into the platform** so the inter-network traffic path doesn't exist in the first place.
+
+### User Defined Networks (UDN) -- isolation by default
+
+Starting in OpenShift 4.18, OVN-Kubernetes gained **User Defined Networks** -- custom L2/L3 network segments that are isolated by default at the OVN data plane level:
+
+> *"All these segments are isolated by default. By default, these pods are isolated from communicating with pods that exist in other UDNs."*
+>
+> *"Network policies that enable traffic between namespaces connected to different user-defined primary networks are not effective. These traffic policies do not take effect because there is no connectivity between these isolated networks."*
+
+There is simply **no logical router connecting UDNs**. This is not a policy that can be overridden with a NetworkPolicy -- the data plane path does not exist.
+
+Two scopes are available:
+- **UserDefinedNetwork (UDN)** -- namespace-scoped, provides tenant isolation within a single namespace
+- **ClusterUserDefinedNetwork (CUDN)** -- cluster-scoped, explicitly spans multiple namespaces so VMs in different namespaces can share a network
+
+VMs auto-connect to UDNs when created in a namespace labeled with `k8s.ovn.org/primary-user-defined-network`. Each UDN includes a software-defined router for external connectivity (gateway at the first address of the CIDR), and L2 UDNs support VM live migration across nodes.
+
+### Three-tier OVN ACL policy model
+
+For traffic **within** a UDN (east-west between VMs/pods on the same network), OpenShift uses a tiered ACL system:
+
+| Tier | Resource | Scope | Who manages | OVN ACL priority |
+|---|---|---|---|---|
+| Tier 1 | **AdminNetworkPolicy (ANP)** | Cluster-wide, cross-namespace | Platform admin (guardrails) | Highest |
+| Tier 2 | **NetworkPolicy** | Namespace-scoped | Tenant / developer | Middle |
+| Tier 3 | **BaselineAdminNetworkPolicy (BANP)** | Cluster-wide fallback | Platform admin (defaults) | Lowest |
+
+Evaluation is top-down: ANP `allow`/`deny` is final; ANP `pass` delegates to Tier 2 NetworkPolicy; if nothing matches, BANP applies. This gives platform admins enforceable security baselines that tenants cannot override.
+
+### Comparison: OpenShift UDN vs. Harvester + Kube-OVN VPC
+
+| Aspect | OpenShift Virtualization (UDN) | Harvester + Kube-OVN (VPC) |
+|---|---|---|
+| **Default isolation** | Hard -- no data plane path between UDNs | VPCs are isolated, but peering/routing can bridge them |
+| **Inter-network communication** | Not possible between UDNs (by design) | Possible via VPC peering, static routes, egress gateways |
+| **Firewall insertion needed?** | No -- if networks can't talk, nothing to firewall | Yes -- if VPCs need controlled communication |
+| **Controlled cross-network sharing** | Create a CUDN spanning specific namespaces; only VMs on the same CUDN can talk | VPC peering (bilateral) or firewall VM hub-and-spoke |
+| **Microsegmentation within a network** | ANP + NetworkPolicy + BANP (3-tier OVN ACL) | NetworkPolicy + Subnet ACL + Security Groups |
+| **VM support** | Auto-connect via namespace label; DHCP; live migration on L2 UDNs | Connect via Multus / Kube-OVN annotations |
+| **Multi-VPC/multi-UDN centralized firewall** | Not built-in; would still need CN-Series or NSM for inspected cross-network traffic | This design document (hub-and-spoke firewall VM) |
+
+### Key takeaway
+
+OpenShift's answer is: **don't route between isolated networks at all**. If two tenants' VMs need to share a network, create a CUDN that explicitly spans their namespaces, and use the ANP/NetworkPolicy/BANP stack for microsegmentation within it.
+
+This eliminates the firewall VM entirely for **multi-tenancy** (tenants should never see each other's traffic). But it is less suited for **hub-and-spoke** patterns where traffic between zones *must* flow but needs inspection (e.g., app-to-db allowed on port 5432 only, with logging). For that use case, even OpenShift would need a firewall VM or CN-Series CNF -- UDN isolation does not provide a "controlled bridge" between networks.
+
+Kube-OVN on Harvester could adopt a similar model if it implemented hard inter-VPC isolation with no peering, but today VPC peering and static routes exist precisely to enable controlled cross-VPC communication -- which is why the firewall insertion problem arises.
+
+### Sources
+
+- [User Defined Networks in OpenShift Virtualization](https://www.redhat.com/en/blog/user-defined-networks-red-hat-openshift-virtualization)
+- [Enhancing the Kubernetes pod network with UDNs](https://www.redhat.com/en/blog/enhancing-kubernetes-pod-network-user-defined-networks)
+- [AdminNetworkPolicy on OVN-Kubernetes](https://ovn-kubernetes.io/features/network-security-controls/admin-network-policy/)
+- [Using AdminNetworkPolicy API (Red Hat)](https://www.redhat.com/en/blog/using-adminnetworkpolicy-api-to-secure-openshift-cluster-networking)
+- [OKD 4.19 UDN docs](https://docs.okd.io/4.19/networking/multiple_networks/primary_networks/about-user-defined-networks.html)
+- [OpenShift 4.18 networking (Network World)](https://www.networkworld.com/article/3833169/red-hat-openshift-4-18-expands-cloud-native-networking.html)
+
 ## Open Questions and Limitations
 
 1. **Multiple vpcPeerings on one VPC:** The `vpcPeerings` field is an array, but the docs only confirm bilateral (2 VPC) peering. Whether a single VPC can maintain N simultaneous peerings is **not explicitly documented**. This is the design's biggest risk -- test with 3+ VPCs before committing.
