@@ -117,36 +117,57 @@ limactl create --name k3k-kube-ovn lima/k3k-kube-ovn.yaml
 limactl start k3k-kube-ovn
 ```
 
-### 2. Verify Deployments
-Shell into the VM and verify the status of components. Kubectl is pre-configured:
+### 2. Configure macOS Host Access
+To control the host cluster and the virtual cluster directly from your Mac terminal, copy the pre-configured guest kubeconfig.
+Because Lima forwards guest port `6443` to `127.0.0.1:6443` on macOS [lima/k3k-kube-ovn.yaml:L25-L28](lima/k3k-kube-ovn.yaml#L25-L28), your local `kubectl` can communicate with the RKE2 host cluster immediately:
 
 ```bash
-# Access the VM shell
-limactl shell k3k-kube-ovn
+# 1. Copy the host cluster kubeconfig from Lima guest to your Mac
+limactl copy k3k-kube-ovn:.kube/config-mac ~/.kube/k3k-kube-ovn.yaml
 
-# Check that the host node is Ready
+# 2. Configure your shell to use the copied kubeconfig
+export KUBECONFIG=~/.kube/k3k-kube-ovn.yaml
+
+# 3. Verify that local kubectl can reach the host cluster inside the VM
 kubectl get nodes
-
-# Check that all pods are running successfully
 kubectl get pods -A
 ```
 
 Expected output:
+* The host node `lima-k3k-kube-ovn` is in `Ready` status.
 * Kube-OVN, cert-manager, and k3k pods are in `Running` state in `kube-system`, `cert-manager`, and `k3k-system` namespaces.
+
+### 3. Control and Manage Virtual Clusters with `k3kcli` on macOS
+Since `k3kcli` is installed on your macOS, you can manage virtual clusters directly from your Mac terminal using the host cluster kubeconfig:
+
+```bash
+# Set active context to the host cluster
+export KUBECONFIG=~/.kube/k3k-kube-ovn.yaml
+
+# List virtual clusters running on the host
+k3kcli cluster list
+
+# Generate the kubeconfig for the virtual cluster
+k3kcli kubeconfig generate kube-ovn-cluster --namespace k3k-kube-ovn-cluster > ~/.kube/kube-ovn-cluster.yaml
+```
 
 ---
 
 ## Verification & Troubleshooting
 
-### 1. View OVN Subnets
+All verification and troubleshooting commands can be run directly from your Mac terminal without SSH-ing into the VM.
+
+### 1. View OVN Subnets from macOS
 To verify that the custom virtual subnet is active:
 ```bash
+export KUBECONFIG=~/.kube/k3k-kube-ovn.yaml
 kubectl get subnet k3k-kube-ovn-subnet
 ```
 
 ### 2. Check Virtual Pod IPs
 Verify that virtual pods and test pods schedule directly inside the custom host-level subnet CIDR (`10.16.0.0/16`):
 ```bash
+export KUBECONFIG=~/.kube/k3k-kube-ovn.yaml
 kubectl get pods -n k3k-kube-ovn-cluster -o wide
 ```
 
@@ -160,12 +181,14 @@ To verify network traffic routing, deploy the alpine test pod [manifests/test-po
 
 #### Deploy the Test Pod
 ```bash
+export KUBECONFIG=~/.kube/k3k-kube-ovn.yaml
 kubectl apply -f manifests/test-pod.yaml -n k3k-kube-ovn-cluster
 ```
 
 #### Confirm IP Assignment
 Check that the test pod has been successfully assigned an IP in the `10.16.0.0/16` range:
 ```bash
+export KUBECONFIG=~/.kube/k3k-kube-ovn.yaml
 kubectl get pod test-pod -n k3k-kube-ovn-cluster -o wide
 ```
 
@@ -173,6 +196,7 @@ kubectl get pod test-pod -n k3k-kube-ovn-cluster -o wide
 1. **Host Kubernetes API Server Gateway (`10.43.0.1`):**
    Verify that the pod can communicate with the host API server (unblocked by `private: false` in the Subnet specification):
    ```bash
+   export KUBECONFIG=~/.kube/k3k-kube-ovn.yaml
    kubectl exec -it test-pod -n k3k-kube-ovn-cluster -- ping -c 3 10.43.0.1
    ```
    *Expected result: 3 packets transmitted, 3 received, 0% packet loss.*
@@ -180,12 +204,14 @@ kubectl get pod test-pod -n k3k-kube-ovn-cluster -o wide
 2. **External/Internet Egress (`8.8.8.8`):**
    Verify that standard NAT egress traffic flows properly through the OVS bridge:
    ```bash
+   export KUBECONFIG=~/.kube/k3k-kube-ovn.yaml
    kubectl exec -it test-pod -n k3k-kube-ovn-cluster -- ping -c 3 8.8.8.8
    ```
    *Expected result: 3 packets transmitted, 3 received, 0% packet loss.*
 
 After testing, clean up the test workload:
 ```bash
+export KUBECONFIG=~/.kube/k3k-kube-ovn.yaml
 kubectl delete pod test-pod -n k3k-kube-ovn-cluster
 ```
 

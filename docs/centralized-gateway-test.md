@@ -108,7 +108,45 @@ KUBECONFIG=/tmp/kubeconfig-centralized.yaml kubectl delete pod test-pod-centrali
 rm -f /tmp/kubeconfig-centralized.yaml
 ```
 
-*Expected result for both options: 3 packets transmitted, 3 received, 0% packet loss.*
+---
+
+#### Option C: macOS-Native Verification (Using local k3kcli)
+If you have `k3kcli` and `kubectl` installed on macOS, you can manage and verify the virtual cluster directly from your Mac without SSH-ing into the Lima VM (leveraging the forwarded port 6443).
+
+```bash
+# 1. Copy the host RKE2 kubeconfig to your Mac
+limactl copy k3k-kube-ovn:.kube/config-mac /tmp/kubeconfig-host.yaml
+
+# 2. Deploy the centralized gateway resources from your Mac
+KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl apply -f manifests/centralized-gateway-test/namespace.yaml
+KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl apply -f manifests/centralized-gateway-test/subnet.yaml
+KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl apply -f manifests/centralized-gateway-test/cluster.yaml
+
+# 3. Generate the centralized virtual cluster kubeconfig using your local k3kcli on macOS
+KUBECONFIG=/tmp/kubeconfig-host.yaml k3kcli kubeconfig generate kube-ovn-centralized-cluster --namespace k3k-kube-ovn-centralized-cluster > /tmp/kubeconfig-centralized.yaml
+
+# 4. Deploy the test pod inside the virtual cluster from macOS
+KUBECONFIG=/tmp/kubeconfig-centralized.yaml kubectl apply -f manifests/centralized-gateway-test/test-pod.yaml
+
+# 5. Check the pod status inside the virtual cluster
+KUBECONFIG=/tmp/kubeconfig-centralized.yaml kubectl get pods -o wide
+
+# 6. Verify that k3k has translated it to the host and Kube-OVN has assigned the 10.17.x.x IP
+KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl get pods -n k3k-kube-ovn-centralized-cluster -o wide
+
+# 7. Perform the ping tests from WITHIN the virtual cluster pod
+KUBECONFIG=/tmp/kubeconfig-centralized.yaml kubectl exec -it test-pod-centralized -- ping -c 3 10.43.0.1
+KUBECONFIG=/tmp/kubeconfig-centralized.yaml kubectl exec -it test-pod-centralized -- ping -c 3 8.8.8.8
+
+# 8. Clean up workloads from macOS
+KUBECONFIG=/tmp/kubeconfig-centralized.yaml kubectl delete pod test-pod-centralized
+KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl delete -f manifests/centralized-gateway-test/cluster.yaml
+KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl delete -f manifests/centralized-gateway-test/subnet.yaml
+KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl delete -f manifests/centralized-gateway-test/namespace.yaml
+rm -f /tmp/kubeconfig-centralized.yaml /tmp/kubeconfig-host.yaml
+```
+
+*Expected result for all options: 3 packets transmitted, 3 received, 0% packet loss.*
 
 ---
 

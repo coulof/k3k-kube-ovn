@@ -227,6 +227,12 @@ provision:
         sed -i "s/127.0.0.1/$(hostname -I | awk '{print $1}')/g" ~/.kube/config
       fi
 
+      # Keep a copy with 127.0.0.1 for macOS host control via forwarded port 6443
+      if [ ! -f ~/.kube/config-mac ]; then
+        sudo cp /etc/rancher/rke2/rke2.yaml ~/.kube/config-mac
+        sudo chown $(id -u):$(id -g) ~/.kube/config-mac
+      fi
+
       # Add RKE2 bins to PATH
       grep -q 'rancher/rke2/bin' ~/.bashrc || \
         echo 'export PATH=$PATH:/var/lib/rancher/rke2/bin' >> ~/.bashrc
