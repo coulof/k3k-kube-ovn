@@ -55,33 +55,66 @@ kubectl get subnet k3k-kube-ovn-centralized-subnet
 kubectl get pods -n k3k-kube-ovn-centralized-cluster -o wide
 ```
 
-### 4. Deploy the Centralized Test Pod
-Once the control plane pods are running, deploy the alpine verification container directly in the namespace:
-```bash
-# Deploy the alpine test pod
-kubectl apply -f manifests/centralized-gateway-test/test-pod.yaml -n k3k-kube-ovn-centralized-cluster
+### 4. Perform Egress Routing Verification
 
-# Check that it has been successfully assigned an IP in the 10.17.0.0/16 range
-kubectl get pod test-pod-centralized -n k3k-kube-ovn-centralized-cluster -o wide
-```
-
-### 5. Perform Connectivity Verification
-Verify both local gateway and external internet access through the single centralized node:
-```bash
-# 1. Ping the host API server Gateway IP (10.43.0.1)
-kubectl exec -it test-pod-centralized -n k3k-kube-ovn-centralized-cluster -- ping -c 3 10.43.0.1
-
-# 2. Ping external WAN destination (8.8.8.8) to verify centralized SNAT egress
-kubectl exec -it test-pod-centralized -n k3k-kube-ovn-centralized-cluster -- ping -c 3 8.8.8.8
-```
-*Expected result for both tests: 3 packets transmitted, 3 packets received, 0% packet loss.*
+You can verify the egress routing using either Option A (applying directly on the host) or Option B (applying explicitly inside the virtual cluster itself).
 
 ---
 
-## 🧹 Cleanup Test Workloads
+#### 📌 Option A: Host-Level Verification
+Deploy the alpine verification container directly under the guest's host namespace:
+
+```bash
+# 1. Deploy the test pod into the host-level guest namespace
+kubectl apply -f manifests/centralized-gateway-test/test-pod.yaml -n k3k-kube-ovn-centralized-cluster
+
+# 2. Check that it has been assigned an IP in the 10.17.0.0/16 range
+kubectl get pod test-pod-centralized -n k3k-kube-ovn-centralized-cluster -o wide
+
+# 3. Ping the host API server Gateway IP (10.43.0.1)
+kubectl exec -it test-pod-centralized -n k3k-kube-ovn-centralized-cluster -- ping -c 3 10.43.0.1
+
+# 4. Ping external WAN destination (8.8.8.8) to verify centralized SNAT egress
+kubectl exec -it test-pod-centralized -n k3k-kube-ovn-centralized-cluster -- ping -c 3 8.8.8.8
+
+# 5. Clean up the test workload
+kubectl delete pod test-pod-centralized -n k3k-kube-ovn-centralized-cluster
+```
+
+---
+
+#### 📌 Option B: Virtual Cluster Guest-Level Verification (Explicit)
+Deploy the test pod directly **inside** the k3k virtual cluster, testing the translation and CNI mapping from the guest perspective.
+
+```bash
+# 1. Extract the centralized virtual cluster's kubeconfig from the host secret
+kubectl get secret k3k-kube-ovn-centralized-cluster-kubeconfig -n k3k-kube-ovn-centralized-cluster -o jsonpath='{.data.kubeconfig\.yaml}' | base64 -d > /tmp/kubeconfig-centralized.yaml
+
+# 2. Deploy the test pod explicitly inside the virtual cluster (default namespace)
+KUBECONFIG=/tmp/kubeconfig-centralized.yaml kubectl apply -f manifests/centralized-gateway-test/test-pod.yaml
+
+# 3. Check the pod status inside the virtual cluster
+KUBECONFIG=/tmp/kubeconfig-centralized.yaml kubectl get pods -o wide
+
+# 4. Verify that k3k has translated it to the host and Kube-OVN has assigned the 10.17.x.x IP
+kubectl get pods -n k3k-kube-ovn-centralized-cluster -o wide
+
+# 5. Perform the ping tests from WITHIN the virtual cluster pod
+KUBECONFIG=/tmp/kubeconfig-centralized.yaml kubectl exec -it test-pod-centralized -- ping -c 3 10.43.0.1
+KUBECONFIG=/tmp/kubeconfig-centralized.yaml kubectl exec -it test-pod-centralized -- ping -c 3 8.8.8.8
+
+# 6. Clean up the virtual cluster workload and local kubeconfig file
+KUBECONFIG=/tmp/kubeconfig-centralized.yaml kubectl delete pod test-pod-centralized
+rm -f /tmp/kubeconfig-centralized.yaml
+```
+
+*Expected result for both options: 3 packets transmitted, 3 received, 0% packet loss.*
+
+---
+
+## 🧹 Cleanup Test Infrastructure
 After completing the verification, clean up the centralized gateway test suite:
 ```bash
-kubectl delete -f manifests/centralized-gateway-test/test-pod.yaml -n k3k-kube-ovn-centralized-cluster
 kubectl delete -f manifests/centralized-gateway-test/cluster.yaml
 kubectl delete -f manifests/centralized-gateway-test/subnet.yaml
 kubectl delete -f manifests/centralized-gateway-test/namespace.yaml
