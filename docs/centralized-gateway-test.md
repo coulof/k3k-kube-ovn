@@ -122,28 +122,36 @@ KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl apply -f manifests/centralized-gate
 KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl apply -f manifests/centralized-gateway-test/subnet.yaml
 KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl apply -f manifests/centralized-gateway-test/cluster.yaml
 
-# 3. Generate the centralized virtual cluster kubeconfig using your local k3kcli on macOS
+# 3. Establish a local port-forward on port 7444 to the virtual cluster's API Service
+KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl port-forward -n k3k-kube-ovn-centralized-cluster svc/k3k-kube-ovn-centralized-cluster-service 7444:443 &
+
+# 4. Generate the centralized virtual cluster kubeconfig using your local k3kcli on macOS
 KUBECONFIG=/tmp/kubeconfig-host.yaml k3kcli kubeconfig generate --name kube-ovn-centralized-cluster --namespace k3k-kube-ovn-centralized-cluster --config-name kubeconfig-centralized.yaml
 
-# 4. Deploy the test pod inside the virtual cluster from macOS
+# 5. Point the virtual kubeconfig to your local forwarded port & allow insecure TLS
+kubectl config set-cluster default --server=https://127.0.0.1:7444 --insecure-skip-tls-verify=true --kubeconfig=kubeconfig-centralized.yaml
+
+# 6. Deploy the test pod inside the virtual cluster from macOS
 KUBECONFIG=kubeconfig-centralized.yaml kubectl apply -f manifests/centralized-gateway-test/test-pod.yaml
 
-# 5. Check the pod status inside the virtual cluster
+# 7. Check the pod status inside the virtual cluster
 KUBECONFIG=kubeconfig-centralized.yaml kubectl get pods -o wide
 
-# 6. Verify that k3k has translated it to the host and Kube-OVN has assigned the 10.17.x.x IP
+# 8. Verify that k3k has translated it to the host and Kube-OVN has assigned the 10.17.x.x IP
 KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl get pods -n k3k-kube-ovn-centralized-cluster -o wide
 
-# 7. Perform the ping tests from WITHIN the virtual cluster pod
+# 9. Perform the ping tests from WITHIN the virtual cluster pod
 KUBECONFIG=kubeconfig-centralized.yaml kubectl exec -it test-pod-centralized -- ping -c 3 10.43.0.1
 KUBECONFIG=kubeconfig-centralized.yaml kubectl exec -it test-pod-centralized -- ping -c 3 8.8.8.8
 
-# 8. Clean up workloads from macOS
+# 10. Clean up workloads from macOS
 KUBECONFIG=kubeconfig-centralized.yaml kubectl delete pod test-pod-centralized
 KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl delete -f manifests/centralized-gateway-test/cluster.yaml
 KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl delete -f manifests/centralized-gateway-test/subnet.yaml
 KUBECONFIG=/tmp/kubeconfig-host.yaml kubectl delete -f manifests/centralized-gateway-test/namespace.yaml
 rm -f kubeconfig-centralized.yaml /tmp/kubeconfig-host.yaml
+
+# Note: After verification, remember to stop the background port-forward process (e.g., using 'kill %1' or looking up the job).
 ```
 
 *Expected result for all options: 3 packets transmitted, 3 received, 0% packet loss.*

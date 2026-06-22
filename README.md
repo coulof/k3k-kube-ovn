@@ -138,17 +138,29 @@ Expected output:
 * Kube-OVN, cert-manager, and k3k pods are in `Running` state in `kube-system`, `cert-manager`, and `k3k-system` namespaces.
 
 ### 3. Control and Manage Virtual Clusters with `k3kcli` on macOS
-Since `k3kcli` is installed on your macOS, you can manage virtual clusters directly from your Mac terminal using the host cluster kubeconfig:
+Since `k3kcli` is installed on your macOS, you can manage virtual clusters directly from your Mac terminal using the host cluster kubeconfig.
+
+Because the virtual cluster's API server runs inside the VM guest as a Kubernetes `ClusterIP` Service on the host, macOS has no direct routing to its IP range (`10.43.0.0/16`). To connect to the virtual cluster from macOS, establish a local port forward and configure your local kubeconfig to route through it:
 
 ```bash
-# Set active context to the host cluster
+# 1. Set active context to the host cluster
 export KUBECONFIG=~/.kube/k3k-kube-ovn.yaml
 
-# List virtual clusters running on the host
+# 2. List virtual clusters running on the host
 k3kcli cluster list
 
-# Generate the kubeconfig for the virtual cluster (writes to current directory)
+# 3. Establish a local port-forward on port 7444 to the virtual cluster's API Service
+kubectl port-forward -n k3k-kube-ovn-cluster svc/k3k-kube-ovn-cluster-service 7444:443 &
+
+# 4. Generate the kubeconfig for the virtual cluster (writes to current directory)
 k3kcli kubeconfig generate --name kube-ovn-cluster --namespace k3k-kube-ovn-cluster --config-name kube-ovn-cluster.yaml
+
+# 5. Point the virtual kubeconfig to your local forwarded port & allow insecure TLS
+kubectl config set-cluster default --server=https://127.0.0.1:7444 --insecure-skip-tls-verify=true --kubeconfig=kube-ovn-cluster.yaml
+
+# 6. Interact with the virtual cluster directly from your Mac!
+KUBECONFIG=kube-ovn-cluster.yaml kubectl get nodes
+KUBECONFIG=kube-ovn-cluster.yaml kubectl get pods -A
 ```
 
 ---
