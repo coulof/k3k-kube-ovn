@@ -1,208 +1,127 @@
-# Design: Virtual Firewall for Inter-VPC Traffic on Harvester with Kube-OVN
+# Design: Controlling Inter-VPC Traffic on Harvester with Kube-OVN
 
 ## Problem Statement
 
-Multiple VPCs on a Harvester cluster need to communicate with each other, but all inter-VPC traffic must pass through a centralized firewall for inspection, policy enforcement, and audit logging.
+Multiple VPCs on a Harvester cluster need controlled communication between them -- for example, an application VPC talking to a database VPC on port 5432 only, with inspection and audit logging. How should this be designed?
 
-Kube-OVN's native options are insufficient on their own:
+## Recommendation: Isolated VPCs + External Firewall
 
-- **VPC Peering** -- bilateral only (2 VPCs), no middlebox in the path, no inspection ([Kube-OVN VPC Peering](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc-peering/))
-- **VPC Egress Gateway** -- strictly VPC-to-external, not inter-VPC ([Kube-OVN VPC Egress Gateway](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc-egress-gateway/))
-- **Subnet ACLs / NetworkPolicy** -- microsegmentation within a VPC, not cross-VPC routing ([#7381](https://github.com/harvester/harvester/issues/7381))
-- **Multi-VPC centralized access** -- requested upstream but not yet implemented ([kubeovn/kube-ovn#6229](https://github.com/kubeovn/kube-ovn/issues/6229))
+**Keep VPCs isolated inside the cluster. Bridge them through an external firewall/router that sits outside the cluster trust domain.**
 
-A virtual firewall VM (pfSense, OPNsense, VyOS, Fortinet, Palo Alto, etc.) running on Harvester can fill this gap.
+This is the same architectural pattern that OpenShift Virtualization adopted with User Defined Networks (hard isolation by default, no in-cluster bridging), and the standard approach in traditional data center and cloud networking.
 
-## Design Overview
+### Why not a firewall VM inside the cluster?
 
-A **hub-and-spoke** topology where the firewall VM acts as the transit router between all VPCs.
+A firewall's value comes from sitting **outside** the trust boundary it protects. A firewall VM running inside the same cluster as the workloads it guards is architecturally questionable:
+
+| Concern | Impact |
+|---|---|
+| **Trust boundary violation** | Anyone with cluster-admin RBAC can delete, modify, or bypass the firewall VM and its OVN policy routes. If the cluster is compromised, the firewall is too. |
+| **Performance overhead** | All inter-VPC traffic hairpins through a VM on the same hosts -- adding latency and consuming compute. OVN enforces L3/L4 rules at wire speed in the OVS data plane via ACLs, without a middlebox. |
+| **OVN already is the firewall** | NetworkPolicy, Subnet ACLs, Security Groups, and AdminNetworkPolicy all translate to OVN ACLs. For L3/L4 east-west rules, a VM adds nothing that OVN can't do natively and faster. |
+| **Single point of failure** | The firewall VM becomes a dependency for all inter-VPC traffic. HA (VRRP, ECMP) adds complexity inside a platform that already has HA mechanisms. |
+| **Operational burden** | A manually managed VyOS/pfSense/OPNsense requires patching, config backup, monitoring -- a separate operational domain inside your Kubernetes cluster. |
+
+### When does the firewall belong inside?
+
+Only two cases justify in-cluster traffic inspection:
+
+| Case | Why OVN isn't enough | Right tool |
+|---|---|---|
+| **L7 / IPS / DPI** | OVN ACLs are L3/L4 only. Application-layer inspection, protocol decoding, or intrusion detection needs something that understands L7. | [Palo Alto CN-Series](https://docs.paloaltonetworks.com/cn-series) (CNF, CRD-managed, inline via CNI chaining) or [NSM](https://networkservicemesh.io/) service function chain with Suricata/nftables |
+| **Compliance mandate** | A regulation or auditor requires a specific named appliance ("traffic must traverse a FortiGate with FortiGuard enabled"). | Deploy the required appliance -- but still prefer it external when possible |
+
+Even in these cases, a **containerized CNF** (CN-Series) or **NSM service chain** is preferable to a firewall VM.
+
+## Architecture
 
 ```
-                    ┌─────────────────────────────────┐
-                    │        Transit/Security VPC      │
-                    │         (vpc-transit)             │
-                    │                                   │
-                    │   ┌───────────────────────────┐   │
-                    │   │  Firewall VM (e.g. VyOS)  │   │
-                    │   │                           │   │
-                    │   │  eth0: 172.16.0.2/24      │   │ ◄── transit subnet
-                    │   │  eth1: 10.10.0.2/24       │   │ ◄── peered to vpc-app
-                    │   │  eth2: 10.20.0.2/24       │   │ ◄── peered to vpc-db
-                    │   │  eth3: 10.30.0.2/24       │   │ ◄── peered to vpc-dmz
-                    │   │  eth4: 192.168.1.2/24     │   │ ◄── underlay (external)
-                    │   └───────────────────────────┘   │
-                    └──────┬──────────┬──────────┬──────┘
-                           │          │          │
-              VPC Peering  │          │          │  VPC Peering
-              (169.254.x)  │          │          │  (169.254.x)
-                           │          │          │
-                ┌──────────┘   ┌──────┘   ┌──────┘
-                ▼              ▼          ▼
-         ┌───────────┐  ┌───────────┐  ┌───────────┐
-         │  vpc-app   │  │  vpc-db    │  │  vpc-dmz   │
-         │            │  │            │  │            │
-         │ 10.10.0/24 │  │ 10.20.0/24 │  │ 10.30.0/24 │
-         │ App VMs    │  │ DB VMs     │  │ Web VMs    │
-         └───────────┘  └───────────┘  └───────────┘
+                          External Firewall / Router
+                       (separate trust domain, outside cluster)
+                        ┌──────────────────────────────┐
+                        │   e.g. FortiGate / PA / VyOS  │
+                        │                                │
+                        │   VLAN 100: 192.168.100.1/24   │
+                        │   VLAN 200: 192.168.200.1/24   │
+                        │   VLAN 300: 192.168.300.1/24   │
+                        │   WAN:      203.0.113.1/24     │
+                        └───────┬──────┬──────┬──────────┘
+                                │      │      │
+                   Underlay     │      │      │    Underlay
+                   VLAN 100     │      │      │    VLAN 300
+                                │      │      │
+             ┌──────────────────┘      │      └──────────────────┐
+             ▼                         ▼                         ▼
+    ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+    │     VPC-App       │    │     VPC-DB        │    │     VPC-DMZ       │
+    │     (overlay)     │    │     (overlay)     │    │     (overlay)     │
+    │                   │    │                   │    │                   │
+    │  Egress Gateway   │    │  Egress Gateway   │    │  Egress Gateway   │
+    │  → underlay       │    │  → underlay       │    │  → underlay       │
+    │    VLAN 100       │    │    VLAN 200       │    │    VLAN 300       │
+    │                   │    │                   │    │                   │
+    │  OVN ACLs for     │    │  OVN ACLs for     │    │  OVN ACLs for     │
+    │  microsegment.    │    │  microsegment.    │    │  microsegment.    │
+    └──────────────────┘    └──────────────────┘    └──────────────────┘
+
+              Harvester Cluster (Kube-OVN)
 ```
 
-### Key Principle
+### How it works
 
-Every VPC has a **default route (0.0.0.0/0) pointing at the firewall VM's interface** in that VPC's peered subnet. The firewall VM has interfaces in all VPCs (via Multus/Kube-OVN secondary NICs) and applies security policies before forwarding.
+1. **VPCs are fully isolated** inside the cluster -- no peering, no static routes between them
+2. Each VPC has a **VPC Egress Gateway** ([docs](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc-egress-gateway/)) that SNATs traffic onto an **underlay VLAN** via Macvlan
+3. Each VPC gets its own VLAN on the physical network (VLAN 100, 200, 300)
+4. The **external firewall** has an interface on each VLAN and controls:
+   - Which VPCs can talk to each other (zone-based policy)
+   - On which ports/protocols (L4 rules)
+   - With L7 inspection, IPS, logging, audit trail
+   - Internet/WAN access (north-south)
+5. **East-west within a VPC** is handled by OVN ACLs (NetworkPolicy, Subnet ACLs, Security Groups) -- no firewall involvement
 
-## Design Options
+### Separation of concerns
 
-### Option A: Multi-NIC Firewall with VPC Peering (Scalable)
+| Layer | Responsible for | Mechanism |
+|---|---|---|
+| **Kube-OVN (inside cluster)** | VPC isolation, microsegmentation within a VPC, pod networking | OVN logical switches/routers, ACLs, NetworkPolicy, Subnet ACLs |
+| **Egress Gateway (cluster edge)** | Bridging overlay VPC to physical underlay VLAN | VpcEgressGateway CRD, Macvlan, SNAT |
+| **External Firewall (outside cluster)** | Inter-VPC policy, L7 inspection, north-south security, audit logging | Zone-based firewall rules, IPS/IDS, logging |
+| **Physical Switch** | VLAN trunking, L2 forwarding between firewall and cluster nodes | 802.1Q trunk ports, IGMP snooping |
 
-Each spoke VPC peers with the transit VPC. The firewall VM has one NIC per peered VPC plus an optional underlay NIC for external access.
+## Manifests
 
-**Pros:**
-- Each VPC remains fully isolated -- traffic only crosses VPCs through the firewall
-- Scales to N VPCs (one peering + one firewall NIC per VPC)
-- Firewall has full visibility: source VPC, destination VPC, L3/L4/L7 content
-- Can apply zone-based policies (app→db: allow 5432/tcp, dmz→db: deny all)
-
-**Cons:**
-- VPC peering is currently limited to bilateral pairs (each spoke peers only with transit)
-- Spoke-to-spoke traffic traverses two hops (spoke→firewall→spoke)
-- Firewall VM is a single point of failure (mitigate with HA pair)
-
-**Current limitation:** Kube-OVN supports only [bilateral VPC peering](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc-peering/). Each spoke VPC can peer with the transit VPC, but the transit VPC needs N peerings (one per spoke). This works if Kube-OVN allows one VPC to have multiple `vpcPeerings` entries -- the CRD field is an array, suggesting this is possible, but it is not explicitly documented for N>1.
-
-### Option B: Multi-NIC Firewall on Shared Subnets (Simpler)
-
-Instead of VPC peering, place the firewall VM directly on each VPC's subnet using Multus secondary NICs. Each VPC's subnet uses the firewall's IP as its gateway.
-
-**Pros:**
-- No VPC peering needed -- simpler configuration
-- Firewall is the gateway; all traffic naturally flows through it
-- Works today with Harvester v1.8 Kube-OVN integration
-
-**Cons:**
-- Firewall VM's pod needs annotation for each network attachment
-- Kube-OVN assigns the gateway role to OVN by default; overriding requires `disableGatewayCheck: true` and careful IP planning
-- Scaling to many VPCs means many NICs on a single VM
-
-### Option C: Underlay Transit + Overlay Spokes (Hybrid)
-
-The firewall VM sits on an underlay/VLAN subnet with direct physical network access. Each spoke VPC uses a VPC Egress Gateway or static route to forward inter-VPC-bound traffic to the firewall's underlay IP. The firewall routes back into the destination VPC via another underlay path or overlay.
-
-**Pros:**
-- Firewall has native physical network performance (no encapsulation overhead)
-- Underlay path can carry multicast, non-IP protocols
-- Matches traditional DC firewall placement
-
-**Cons:**
-- Requires underlay subnets on both sides of the firewall
-- Lose OVN L3 features on underlay segments
-- More complex physical switch configuration
-
-## Recommended Design: Option A (Multi-NIC + VPC Peering)
-
-Option A provides the cleanest isolation model and matches the VPC abstraction. Here are the manifests.
-
-### Network Layout
-
-| VPC | Subnet CIDR | Firewall IP in this VPC | Purpose |
-|---|---|---|---|
-| vpc-transit | 172.16.0.0/24 | 172.16.0.2 | Firewall management + HA |
-| vpc-app | 10.10.0.0/24 | peered via 169.254.1.1 | Application VMs |
-| vpc-db | 10.20.0.0/24 | peered via 169.254.2.1 | Database VMs |
-| vpc-dmz | 10.30.0.0/24 | peered via 169.254.3.1 | DMZ / public-facing VMs |
-| (underlay) | 192.168.1.0/24 | 192.168.1.2 | External/internet access |
-
-### Manifests
-
-#### VPCs with Peering and Static Routes
+### VPCs (isolated, no peering)
 
 ```yaml
-# Transit VPC -- the hub
-apiVersion: kubeovn.io/v1
-kind: Vpc
-metadata:
-  name: vpc-transit
-spec:
-  # Peer with each spoke VPC
-  vpcPeerings:
-    - remoteVpc: vpc-app
-      localConnectIP: 169.254.1.1/30
-    - remoteVpc: vpc-db
-      localConnectIP: 169.254.2.1/30
-    - remoteVpc: vpc-dmz
-      localConnectIP: 169.254.3.1/30
-  staticRoutes:
-    # Route to spoke subnets via peering endpoints
-    - cidr: 10.10.0.0/24
-      nextHopIP: 169.254.1.2
-      policy: policyDst
-    - cidr: 10.20.0.0/24
-      nextHopIP: 169.254.2.2
-      policy: policyDst
-    - cidr: 10.30.0.0/24
-      nextHopIP: 169.254.3.2
-      policy: policyDst
-
----
-# App VPC -- spoke
 apiVersion: kubeovn.io/v1
 kind: Vpc
 metadata:
   name: vpc-app
 spec:
-  vpcPeerings:
-    - remoteVpc: vpc-transit
-      localConnectIP: 169.254.1.2/30
-  staticRoutes:
-    # Default route: ALL traffic goes through the firewall
-    - cidr: 0.0.0.0/0
-      nextHopIP: 169.254.1.1
-      policy: policyDst
+  # No vpcPeerings -- fully isolated
+  # No staticRoutes to other VPCs
+  staticRoutes: []
 
 ---
-# DB VPC -- spoke
 apiVersion: kubeovn.io/v1
 kind: Vpc
 metadata:
   name: vpc-db
 spec:
-  vpcPeerings:
-    - remoteVpc: vpc-transit
-      localConnectIP: 169.254.2.2/30
-  staticRoutes:
-    - cidr: 0.0.0.0/0
-      nextHopIP: 169.254.2.1
-      policy: policyDst
+  staticRoutes: []
 
 ---
-# DMZ VPC -- spoke
 apiVersion: kubeovn.io/v1
 kind: Vpc
 metadata:
   name: vpc-dmz
 spec:
-  vpcPeerings:
-    - remoteVpc: vpc-transit
-      localConnectIP: 169.254.3.2/30
-  staticRoutes:
-    - cidr: 0.0.0.0/0
-      nextHopIP: 169.254.3.1
-      policy: policyDst
+  staticRoutes: []
 ```
 
-#### Subnets
+### Subnets
 
 ```yaml
-apiVersion: kubeovn.io/v1
-kind: Subnet
-metadata:
-  name: subnet-transit
-spec:
-  vpc: vpc-transit
-  cidrBlock: 172.16.0.0/24
-  gateway: 172.16.0.1
-  protocol: IPv4
-
----
 apiVersion: kubeovn.io/v1
 kind: Subnet
 metadata:
@@ -236,237 +155,225 @@ spec:
   protocol: IPv4
 ```
 
-#### Firewall VM (KubeVirt on Harvester)
-
-The firewall VM needs a NIC on the transit subnet plus an optional underlay NIC for external access. The VPC peering handles routing at the OVN level -- the firewall VM sees peered traffic arriving on its transit subnet interface because the transit VPC's logical router forwards it.
+### Underlay VLANs for Egress
 
 ```yaml
-# Network Attachment for underlay/external access (optional)
-apiVersion: k8s.cni.cncf.io/v1
-kind: NetworkAttachmentDefinition
+# Provider network -- maps to the physical NIC on Harvester nodes
+apiVersion: kubeovn.io/v1
+kind: ProviderNetwork
 metadata:
-  name: underlay-external
-  namespace: vm-firewall
+  name: provider-fw
 spec:
-  config: |
-    {
-      "cniVersion": "0.3.1",
-      "type": "kube-ovn",
-      "server_socket": "/run/openvswitch/kube-ovn-daemon.sock",
-      "provider": "underlay-external.vm-firewall.ovn"
-    }
+  defaultInterface: bond1
 
 ---
-# Firewall VM
-apiVersion: kubevirt.io/v1
-kind: VirtualMachine
+# One VLAN per VPC
+apiVersion: kubeovn.io/v1
+kind: Vlan
 metadata:
-  name: firewall-01
-  namespace: vm-firewall
-  labels:
-    app: firewall
+  name: vlan100
 spec:
-  running: true
-  template:
-    metadata:
-      labels:
-        app: firewall
-      annotations:
-        # Primary NIC on transit subnet
-        ovn.kubernetes.io/logical_switch: subnet-transit
-        ovn.kubernetes.io/ip_address: "172.16.0.2"
-        # Enable IP forwarding inside the VM
-        ovn.kubernetes.io/port_security: "false"
-    spec:
-      domain:
-        cpu:
-          cores: 4
-        resources:
-          requests:
-            memory: 4Gi
-        devices:
-          interfaces:
-            - name: transit
-              bridge: {}
-            # Add underlay NIC for external access
-            - name: external
-              bridge: {}
-          disks:
-            - name: rootdisk
-              disk:
-                bus: virtio
-      networks:
-        - name: transit
-          pod: {}
-        - name: external
-          multus:
-            networkName: underlay-external
-      volumes:
-        - name: rootdisk
-          containerDisk:
-            image: <your-firewall-image>   # VyOS, OPNsense, etc.
+  id: 100
+  provider: provider-fw
+
+---
+apiVersion: kubeovn.io/v1
+kind: Vlan
+metadata:
+  name: vlan200
+spec:
+  id: 200
+  provider: provider-fw
+
+---
+apiVersion: kubeovn.io/v1
+kind: Vlan
+metadata:
+  name: vlan300
+spec:
+  id: 300
+  provider: provider-fw
+
+---
+# Underlay subnets for each VLAN (firewall-facing side)
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: underlay-app
+spec:
+  protocol: IPv4
+  cidrBlock: 192.168.100.0/24
+  gateway: 192.168.100.1       # firewall's IP on this VLAN
+  vlan: vlan100
+  natOutgoing: false
+
+---
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: underlay-db
+spec:
+  protocol: IPv4
+  cidrBlock: 192.168.200.0/24
+  gateway: 192.168.200.1
+  vlan: vlan200
+  natOutgoing: false
+
+---
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: underlay-dmz
+spec:
+  protocol: IPv4
+  cidrBlock: 192.168.300.0/24
+  gateway: 192.168.300.1
+  vlan: vlan300
+  natOutgoing: false
 ```
 
-### How Traffic Flows
-
-```
-VM in vpc-app (10.10.0.5) → VM in vpc-db (10.20.0.8)
-
-1. App VM sends packet to 10.20.0.8
-2. vpc-app has default route → 169.254.1.1 (transit VPC peering endpoint)
-3. OVN delivers packet to vpc-transit's logical router
-4. vpc-transit routes 10.20.0.0/24 → 169.254.2.2 (peering to vpc-db)
-5. BUT: the transit VPC's subnet hosts the firewall VM at 172.16.0.2
-   → OVN policy route can redirect to the firewall VM first
-6. Firewall inspects, applies policy, forwards (or drops)
-7. Packet exits firewall → vpc-transit router → peering → vpc-db → DB VM
-```
-
-**Note:** Step 5-6 requires that the transit VPC has policy routes configured to steer peered traffic through the firewall VM's IP before forwarding to the destination peering endpoint. This is the critical piece -- without it, OVN would route directly between peering endpoints, bypassing the firewall.
+### Egress Gateways (one per VPC)
 
 ```yaml
-# Policy route on vpc-transit to force traffic through the firewall
-# (applied to vpc-transit's logical router)
+apiVersion: kubeovn.io/v1
+kind: VpcEgressGateway
+metadata:
+  name: egw-app
+  namespace: default
 spec:
-  policyRoutes:
-    - priority: 1000
-      match: "ip4.src == 10.10.0.0/24 && ip4.dst == 10.20.0.0/24"
-      action: reroute
-      nextHopIP: 172.16.0.2   # firewall VM
-    - priority: 1000
-      match: "ip4.src == 10.20.0.0/24 && ip4.dst == 10.10.0.0/24"
-      action: reroute
-      nextHopIP: 172.16.0.2
-    # ... one pair per spoke-to-spoke direction
+  vpc: vpc-app
+  replicas: 2
+  externalSubnet: underlay-app
+  bfd:
+    enabled: true
+  policies:
+    - snat: true
+      subnets:
+        - subnet-app
+
+---
+apiVersion: kubeovn.io/v1
+kind: VpcEgressGateway
+metadata:
+  name: egw-db
+  namespace: default
+spec:
+  vpc: vpc-db
+  replicas: 2
+  externalSubnet: underlay-db
+  bfd:
+    enabled: true
+  policies:
+    - snat: true
+      subnets:
+        - subnet-db
+
+---
+apiVersion: kubeovn.io/v1
+kind: VpcEgressGateway
+metadata:
+  name: egw-dmz
+  namespace: default
+spec:
+  vpc: vpc-dmz
+  replicas: 2
+  externalSubnet: underlay-dmz
+  bfd:
+    enabled: true
+  policies:
+    - snat: true
+      subnets:
+        - subnet-dmz
 ```
+
+### Microsegmentation within VPCs (OVN ACLs)
+
+```yaml
+# Example: only allow DB VMs to receive traffic on port 5432
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-allow-5432
+  namespace: vpc-db-workloads
+spec:
+  podSelector:
+    matchLabels:
+      role: database
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 5432
+```
+
+## Traffic Flow Example
+
+```
+App VM (10.10.0.5, vpc-app) → DB VM (10.20.0.8, vpc-db) on port 5432
+
+1. App VM sends packet to 10.20.0.8:5432
+2. vpc-app has no route to 10.20.0.0/24 (VPCs are isolated)
+3. App VM's default route goes through the egress gateway (egw-app)
+4. Egress gateway SNATs and sends to underlay VLAN 100
+5. Physical switch delivers to external firewall on VLAN 100 interface
+6. Firewall evaluates zone policy:
+   - Zone "app" (VLAN 100) → Zone "db" (VLAN 200): allow TCP/5432
+   - Logs the connection, runs IPS inspection
+   - Routes packet to VLAN 200
+7. Packet enters Harvester cluster on VLAN 200
+8. Kube-OVN underlay delivers to vpc-db's egress gateway (reverse path)
+9. DB VM receives packet; OVN NetworkPolicy allows TCP/5432
+```
+
+## External Firewall Configuration (conceptual)
+
+The firewall is configured with zones mapped to VLANs:
+
+```
+Zone "app"  → interface VLAN 100 (192.168.100.1/24)
+Zone "db"   → interface VLAN 200 (192.168.200.1/24)
+Zone "dmz"  → interface VLAN 300 (192.168.300.1/24)
+Zone "wan"  → interface WAN       (203.0.113.1/24)
+
+Policies:
+  app → db:   allow TCP/5432, log
+  dmz → app:  allow TCP/443, TCP/80, log
+  app → wan:  allow TCP/443, log
+  db  → wan:  deny all
+  *   → *:    deny all, log
+```
+
+This is managed entirely outside Kubernetes -- through the firewall's own UI/API/Terraform/Ansible. The cluster has no knowledge of or dependency on these rules.
 
 ## High Availability
 
-A single firewall VM is a SPOF. Options:
+| Component | HA mechanism |
+|---|---|
+| **Egress Gateways** | `replicas: 2` + BFD for sub-second failover (built into Kube-OVN) |
+| **External Firewall** | Active/Passive with VRRP or Active/Active with ECMP (standard firewall HA, independent of cluster) |
+| **Physical Switch** | Redundant switch stack / MLAG (standard DC networking) |
 
-| HA Pattern | How it works | Kube-OVN support |
-|---|---|---|
-| **Active/Passive VRRP** | Two firewall VMs share a VIP via VRRP/keepalived; the transit VPC routes to the VIP | Supported -- static route `nextHopIP` points to the VIP |
-| **Active/Active ECMP** | Two firewall VMs each advertise routes; OVN load-balances via ECMP | Requires `enableEcmp: true` on subnet + BFD for failover |
-| **Harvester VM HA** | Harvester restarts the firewall VM on another node if the host fails | Built-in; set `spec.runStrategy: RerunOnFailure` on the VM |
+Each layer has its own HA -- no single component spans trust domains.
 
-The VRRP pattern is the simplest and most commonly supported by firewall appliances (VyOS, pfSense, OPNsense all support VRRP natively).
+## How OpenShift Virtualization Reached the Same Conclusion
 
-## Firewall Software Options
+OpenShift 4.18+ introduced **User Defined Networks (UDN)** with the same philosophy:
 
-| Appliance | License | Multi-arch (arm64+amd64) | KubeVirt compatible | Notes |
-|---|---|---|---|---|
-| **VyOS** | GPL (rolling) / Commercial (LTS) | Yes | Yes (qcow2) | Best fit for routing-heavy designs; full BGP/OSPF |
-| **OPNsense** | BSD | amd64 only | Yes (qcow2/raw) | Rich UI, plugin ecosystem |
-| **pfSense** | Apache 2.0 (CE) | amd64 only | Yes (qcow2/raw) | Widely deployed, large community |
-| **Fortinet FortiGate-VM** | Commercial | Yes | Yes (qcow2) | Enterprise-grade, FortiGuard threat intel |
-| **Palo Alto VM-Series** | Commercial | amd64 only | Yes (qcow2) | Advanced threat prevention, App-ID |
+- UDNs are **isolated by default** at the OVN data plane -- no logical router connects them
+- NetworkPolicy between namespaces on different UDNs **does not work** (hard isolation, not policy-based)
+- If two tenants need a shared network, you create a **ClusterUserDefinedNetwork (CUDN)** that explicitly spans their namespaces
+- Within a shared network, the **AdminNetworkPolicy (ANP) / NetworkPolicy / BaselineAdminNetworkPolicy (BANP)** 3-tier ACL model handles microsegmentation
 
-For arm64 development on MacBook Pro, VyOS is the safest choice.
+OpenShift doesn't discuss firewall VMs inside the cluster because **the architecture eliminates the need**: networks that shouldn't talk can't talk; networks that should talk use OVN ACLs for policy. North-south traffic goes through an external firewall at the infrastructure layer.
 
-## Controller-Managed Alternatives to a Manually Operated Firewall VM
-
-Rather than manually configuring a VyOS or pfSense VM, several projects aim to manage firewall logic via Kubernetes CRDs or controllers. None is a perfect turnkey fit for Harvester + Kube-OVN inter-VPC today, but they represent the landscape.
-
-### Kubernetes-Native CNF Firewalls (runs inside the cluster)
-
-These deploy as containers/pods and inspect traffic inline via CNI chaining or service function chaining -- no separate VM to manage.
-
-| Project | What it does | Maturity | Harvester fit |
-|---|---|---|---|
-| **[Palo Alto CN-Series](https://docs.paloaltonetworks.com/cn-series)** | Container-native NGFW. CRD-based policy. L7 App-ID, IPS, DNS Security. Inspects east-west pod traffic via CNI chaining. | Production (commercial) | Best fit -- deploys as pods, CRD-managed security-as-code |
-| **[F5 BIG-IP Next for Kubernetes](https://www.f5.com/products/big-ip/next/big-ip-next-for-kubernetes)** | CNF firewall + DDoS + IPS. Helm + F5 Lifecycle Operator (FLO). CRD-managed. | Production (commercial, telco-focused) | Heavy; designed for north-south 5G workloads |
-| **[Network Service Mesh (NSM)](https://networkservicemesh.io/)** | CNCF Sandbox project. L2/L3 service function chaining: compose chains like `pod → firewall → pod`. Supports OVS forwarder. | Sandbox (v1.5) | Promising for SFC; no turnkey firewall included -- bring your own VNF (nftables, Suricata, etc.) |
-
-CN-Series is the most production-proven. It inserts as a CNI chain element and inspects traffic inline -- the firewall is fully managed via CRDs with no manual appliance configuration.
-
-NSM is the open-source path: it provides the plumbing (service function chains over OVS/kernel) and you plug in a containerized firewall. Research papers demonstrate firewall + IDS chains on multi-node clusters ([Springer](https://link.springer.com/chapter/10.1007/978-3-031-10419-0_8), [IEEE](https://ieeexplore.ieee.org/document/10811207/)).
-
-### Operators That Manage External Firewall Appliances via API
-
-These wrap a traditional firewall (VM or physical) with a Kubernetes operator that reconciles CRDs into API calls to the appliance.
-
-| Project | What it does | Maturity | Link |
-|---|---|---|---|
-| **[turnbros/opnsense-operator](https://github.com/turnbros/opnsense-operator)** | K8s operator managing OPNsense via REST API. CRDs: `FirewallAlias`, `FirewallFilter`, `ClusterNodeAlias`. | Alpha (5 stars, dormant) | [GitHub](https://github.com/turnbros/opnsense-operator) |
-| **[fortinet/k8s-fortigate-ctrl](https://github.com/fortinet/k8s-fortigate-ctrl)** | K8s controller configuring FortiGate as LB via FortiOS API. CRDs for FortiGate instances. | Alpha ("demo code") | [GitHub](https://github.com/fortinet/k8s-fortigate-ctrl) |
-| **[Calico/Tigera + FortiGate](https://docs.tigera.io/calico-cloud/network-policy/policy-firewalls/fortinet-integration/firewall-integration)** | `tigera-firewall-controller` syncs Calico GlobalNetworkPolicy → FortiGate address groups. Egress only. | **Deprecated** | [Docs](https://docs.tigera.io/calico-cloud/network-policy/policy-firewalls/fortinet-integration/firewall-integration) |
-| **Crossplane + FortiGate** | Theoretical pattern: Crossplane provider maps FortiGate API to K8s CRDs. | **No actual provider exists** -- articles describe the concept, not a shipped product | [Article](https://hoop.dev/blog/what-crossplane-fortigate-actually-does-and-when-to-use-it) |
-
-The opnsense-operator is the closest to "manage a firewall as a controller" in the open-source world, but it is early-stage and dormant. Building a custom operator for VyOS (which has a REST API) or OPNsense is a bounded project following the standard operator pattern: watch CRDs → reconcile → push config to appliance API.
-
-### Cloud-Managed Distributed Firewalls with CRDs
-
-| Project | What it does | Maturity | Harvester fit |
-|---|---|---|---|
-| **[Aviatrix DCF for Kubernetes](https://docs.aviatrix.com/docs/enterprise/8.2/guides/security/dcf/dcf-kubernetes)** | Distributed Cloud Firewall. CRD-based policies. Controls egress, ingress, **and east-west** across VPCs/clusters/VMs. SmartGroups for identity-based policy. | Production (commercial) | **Cloud-only** (AWS/Azure/GCP); not on-premise |
-
-Aviatrix is the most feature-complete for inter-VPC firewall-as-code, but it is a SaaS/cloud product and does not run on bare-metal Harvester.
-
-### What About Traefik / Ingress Controllers?
-
-Traefik operates at L7 HTTP ingress -- its middleware (WAF via CrowdSec/Coraza, IP allowlists, rate limiting) is useful for north-south web traffic but does not handle L3/L4 east-west inter-VPC routing or non-HTTP protocols. Not the right tool for this use case.
-
-### Recommendation for Harvester
-
-| Priority | Approach | Effort | Result |
-|---|---|---|---|
-| **1 (commercial)** | Palo Alto CN-Series | Deploy + license | CRD-managed NGFW, no VM to operate, inline east-west inspection |
-| **2 (open-source, assembly required)** | NSM + containerized firewall (nftables/Suricata) | Medium -- NSM setup + custom VNF container | Service function chain, no VM, but requires building the firewall container and chain config |
-| **3 (open-source, VM-based)** | OPNsense/VyOS VM + fork opnsense-operator (or build custom) | Medium -- VM setup + operator development | Traditional firewall with CRD management layer; operator is a bounded coding project |
-| **4 (manual, lowest effort)** | VyOS/OPNsense VM with manual config (Option A/B/C above) | Low -- just deploy and configure | Works today but no GitOps, no CRD reconciliation |
-
-## How OpenShift Virtualization Solves This Problem
-
-OpenShift Virtualization takes a fundamentally different approach: rather than inserting a firewall between networks, it builds **hard network isolation into the platform** so the inter-network traffic path doesn't exist in the first place.
-
-### User Defined Networks (UDN) -- isolation by default
-
-Starting in OpenShift 4.18, OVN-Kubernetes gained **User Defined Networks** -- custom L2/L3 network segments that are isolated by default at the OVN data plane level:
-
-> *"All these segments are isolated by default. By default, these pods are isolated from communicating with pods that exist in other UDNs."*
->
-> *"Network policies that enable traffic between namespaces connected to different user-defined primary networks are not effective. These traffic policies do not take effect because there is no connectivity between these isolated networks."*
-
-There is simply **no logical router connecting UDNs**. This is not a policy that can be overridden with a NetworkPolicy -- the data plane path does not exist.
-
-Two scopes are available:
-- **UserDefinedNetwork (UDN)** -- namespace-scoped, provides tenant isolation within a single namespace
-- **ClusterUserDefinedNetwork (CUDN)** -- cluster-scoped, explicitly spans multiple namespaces so VMs in different namespaces can share a network
-
-VMs auto-connect to UDNs when created in a namespace labeled with `k8s.ovn.org/primary-user-defined-network`. Each UDN includes a software-defined router for external connectivity (gateway at the first address of the CIDR), and L2 UDNs support VM live migration across nodes.
-
-### Three-tier OVN ACL policy model
-
-For traffic **within** a UDN (east-west between VMs/pods on the same network), OpenShift uses a tiered ACL system:
-
-| Tier | Resource | Scope | Who manages | OVN ACL priority |
-|---|---|---|---|---|
-| Tier 1 | **AdminNetworkPolicy (ANP)** | Cluster-wide, cross-namespace | Platform admin (guardrails) | Highest |
-| Tier 2 | **NetworkPolicy** | Namespace-scoped | Tenant / developer | Middle |
-| Tier 3 | **BaselineAdminNetworkPolicy (BANP)** | Cluster-wide fallback | Platform admin (defaults) | Lowest |
-
-Evaluation is top-down: ANP `allow`/`deny` is final; ANP `pass` delegates to Tier 2 NetworkPolicy; if nothing matches, BANP applies. This gives platform admins enforceable security baselines that tenants cannot override.
-
-### Comparison: OpenShift UDN vs. Harvester + Kube-OVN VPC
-
-| Aspect | OpenShift Virtualization (UDN) | Harvester + Kube-OVN (VPC) |
-|---|---|---|
-| **Default isolation** | Hard -- no data plane path between UDNs | VPCs are isolated, but peering/routing can bridge them |
-| **Inter-network communication** | Not possible between UDNs (by design) | Possible via VPC peering, static routes, egress gateways |
-| **Firewall insertion needed?** | No -- if networks can't talk, nothing to firewall | Yes -- if VPCs need controlled communication |
-| **Controlled cross-network sharing** | Create a CUDN spanning specific namespaces; only VMs on the same CUDN can talk | VPC peering (bilateral) or firewall VM hub-and-spoke |
-| **Microsegmentation within a network** | ANP + NetworkPolicy + BANP (3-tier OVN ACL) | NetworkPolicy + Subnet ACL + Security Groups |
-| **VM support** | Auto-connect via namespace label; DHCP; live migration on L2 UDNs | Connect via Multus / Kube-OVN annotations |
-| **Multi-VPC/multi-UDN centralized firewall** | Not built-in; would still need CN-Series or NSM for inspected cross-network traffic | This design document (hub-and-spoke firewall VM) |
-
-### Key takeaway
-
-OpenShift's answer is: **don't route between isolated networks at all**. If two tenants' VMs need to share a network, create a CUDN that explicitly spans their namespaces, and use the ANP/NetworkPolicy/BANP stack for microsegmentation within it.
-
-This eliminates the firewall VM entirely for **multi-tenancy** (tenants should never see each other's traffic). But it is less suited for **hub-and-spoke** patterns where traffic between zones *must* flow but needs inspection (e.g., app-to-db allowed on port 5432 only, with logging). For that use case, even OpenShift would need a firewall VM or CN-Series CNF -- UDN isolation does not provide a "controlled bridge" between networks.
-
-Kube-OVN on Harvester could adopt a similar model if it implemented hard inter-VPC isolation with no peering, but today VPC peering and static routes exist precisely to enable controlled cross-VPC communication -- which is why the firewall insertion problem arises.
+| OpenShift concept | Kube-OVN equivalent |
+|---|---|
+| UDN (hard isolation) | VPC (isolated, no peering) |
+| CUDN (shared network across namespaces) | VPC Peering or shared subnet |
+| ANP / BANP (platform-admin ACLs) | Subnet ACLs / Security Groups |
+| NetworkPolicy (tenant ACLs) | NetworkPolicy (same) |
+| External firewall (north-south) | External firewall via Egress Gateway + underlay VLAN |
 
 ### Sources
 
@@ -474,49 +381,75 @@ Kube-OVN on Harvester could adopt a similar model if it implemented hard inter-V
 - [Enhancing the Kubernetes pod network with UDNs](https://www.redhat.com/en/blog/enhancing-kubernetes-pod-network-user-defined-networks)
 - [AdminNetworkPolicy on OVN-Kubernetes](https://ovn-kubernetes.io/features/network-security-controls/admin-network-policy/)
 - [Using AdminNetworkPolicy API (Red Hat)](https://www.redhat.com/en/blog/using-adminnetworkpolicy-api-to-secure-openshift-cluster-networking)
-- [OKD 4.19 UDN docs](https://docs.okd.io/4.19/networking/multiple_networks/primary_networks/about-user-defined-networks.html)
-- [OpenShift 4.18 networking (Network World)](https://www.networkworld.com/article/3833169/red-hat-openshift-4-18-expands-cloud-native-networking.html)
 
-## Open Questions and Limitations
+## When L7 In-Cluster Inspection Is Truly Required
 
-1. **Multiple vpcPeerings on one VPC:** The `vpcPeerings` field is an array, but the docs only confirm bilateral (2 VPC) peering. Whether a single VPC can maintain N simultaneous peerings is **not explicitly documented**. This is the design's biggest risk -- test with 3+ VPCs before committing.
+If compliance or security requirements mandate L7 east-west inspection that cannot be solved by routing through the external firewall, these are the viable in-cluster options (ordered by preference):
 
-2. **Policy routes for traffic steering:** The `policyRoutes` field on VPC supports `reroute` action, which redirects matched traffic to a different next-hop. This is essential for forcing peered traffic through the firewall. If `reroute` does not work across peering endpoints, Option B (direct multi-NIC) becomes necessary.
+| Option | Type | Maturity | What it does |
+|---|---|---|---|
+| **[Palo Alto CN-Series](https://docs.paloaltonetworks.com/cn-series)** | CNF (container) | Production (commercial) | CRD-managed NGFW, inline via CNI chaining. L7 App-ID, IPS, DNS Security. |
+| **[NSM](https://networkservicemesh.io/) + VNF** | SFC framework | CNCF Sandbox | Service function chain: `pod → firewall container → pod`. Bring your own VNF (nftables, Suricata). |
+| **[F5 BIG-IP Next CNF](https://www.f5.com/products/big-ip/next/big-ip-next-for-kubernetes)** | CNF (container) | Production (commercial, telco) | Firewall + DDoS + IPS. Helm + F5 Lifecycle Operator. |
 
-3. **Scalability:** Each new spoke VPC adds one peering config + two policy route entries (forward + reverse) per existing spoke. For N spokes, the transit VPC needs N peerings and N*(N-1) policy route entries.
+These are all **containerized** -- no firewall VM to manage. The CN-Series is the most proven for Kubernetes east-west inspection.
 
-4. **Upstream feature request:** [kubeovn/kube-ovn#6229](https://github.com/kubeovn/kube-ovn/issues/6229) requests multi-VPC centralized access natively. If implemented, it could simplify or replace this design.
+### Firewall appliance operators (if a VM is mandated)
 
-5. **Harvester context:** Issue [#4400](https://github.com/harvester/harvester/issues/4400) asked about firewall VMs on Harvester and was closed with the answer that it was not supported at the time (pre-Kube-OVN integration). With the kube-ovn-operator addon (v1.6+), VPC isolation and multi-NIC VMs are now available, making this design feasible.
+If a specific firewall VM appliance is required by compliance:
+
+| Project | Manages | Maturity | Link |
+|---|---|---|---|
+| **[turnbros/opnsense-operator](https://github.com/turnbros/opnsense-operator)** | OPNsense via REST API | Alpha (dormant) | CRDs: `FirewallAlias`, `FirewallFilter` |
+| **[fortinet/k8s-fortigate-ctrl](https://github.com/fortinet/k8s-fortigate-ctrl)** | FortiGate via FortiOS API | Alpha ("demo code") | CRDs for FortiGate instances |
+
+Both are early-stage. Building a custom operator for VyOS or OPNsense (watch CRDs → reconcile → push config via REST API) is a bounded project.
+
+## Appendix: In-Cluster Firewall VM Design (Not Recommended)
+
+For reference, an in-cluster firewall VM design using VPC peering is technically possible but architecturally discouraged. The hub-and-spoke pattern would use:
+
+- A **transit VPC** peered with each spoke VPC via `vpcPeerings` (169.254.x.x link-local interconnects)
+- **Policy routes** on the transit VPC to steer peered traffic through a firewall VM (`policyRoutes` with `action: reroute`)
+- The firewall VM running on the transit subnet with interfaces to each peered VPC
+
+This design has the following problems:
+- VPC peering is documented as bilateral only; multi-peering on a single VPC is not confirmed ([Kube-OVN VPC Peering](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc-peering/))
+- The firewall shares the cluster's trust domain and failure domain
+- Adds latency and complexity for rules that OVN can enforce natively
+- The upstream feature request for multi-VPC centralized access ([kubeovn/kube-ovn#6229](https://github.com/kubeovn/kube-ovn/issues/6229)) remains open
+
+If this pattern is required despite the above, see the git history of this file for the full manifests (commit `ec2955b`).
 
 ## References
 
-### Kube-OVN / Harvester
-- [Kube-OVN VPC](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc/) -- static routes, policy routes
-- [Kube-OVN VPC Peering](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc-peering/) -- bilateral interconnect via 169.254.x.x
-- [Kube-OVN VPC Egress Gateway](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc-egress-gateway/) -- external-only, not inter-VPC
-- [Kube-OVN Multi-Network Policy](https://kubeovn.github.io/docs/v1.16.x/en/guide/multi-network-policy/) -- scoping policies to specific NICs
-- [kubeovn/kube-ovn#6229](https://github.com/kubeovn/kube-ovn/issues/6229) -- multi-VPC centralized access request (open)
+### Kube-OVN
+- [VPC](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc/) -- static routes, policy routes, isolation
+- [VPC Egress Gateway](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc-egress-gateway/) -- bridging overlay to underlay
+- [VPC Peering](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc-peering/) -- bilateral interconnect (not recommended for this pattern)
+- [Underlay Installation](https://kubeovn.github.io/docs/v1.16.x/en/start/underlay/) -- ProviderNetwork, VLAN, underlay subnets
+- [NetworkPolicy](https://kubeovn.github.io/docs/v1.16.x/en/guide/networkpolicy/) -- OVN ACL-based microsegmentation
+- [Security Groups](https://kubeovn.github.io/docs/v1.16.x/en/vpc/security-group/) -- per-pod tiered ACLs
+- [kubeovn/kube-ovn#6229](https://github.com/kubeovn/kube-ovn/issues/6229) -- multi-VPC centralized access (open)
+
+### Harvester
+- [kube-ovn-operator addon](https://docs.harvesterhci.io/v1.8/advanced/addons/kubeovn-operator)
 - [harvester/harvester#4400](https://github.com/harvester/harvester/issues/4400) -- firewall VM on Harvester (closed, pre-KubeOVN)
-- [harvester/harvester#7397](https://github.com/harvester/harvester/issues/7397) -- SDN Epic (Phase 1)
-- [Harvester kube-ovn-operator](https://docs.harvesterhci.io/v1.8/advanced/addons/kubeovn-operator)
+- [harvester/harvester#7397](https://github.com/harvester/harvester/issues/7397) -- SDN Epic
+
+### OpenShift Virtualization (comparative)
+- [UDNs in OpenShift Virtualization](https://www.redhat.com/en/blog/user-defined-networks-red-hat-openshift-virtualization)
+- [Enhancing pod network with UDNs](https://www.redhat.com/en/blog/enhancing-kubernetes-pod-network-user-defined-networks)
+- [AdminNetworkPolicy on OVN-Kubernetes](https://ovn-kubernetes.io/features/network-security-controls/admin-network-policy/)
+- [OpenShift 4.18 networking (Network World)](https://www.networkworld.com/article/3833169/red-hat-openshift-4-18-expands-cloud-native-networking.html)
 
 ### CNF Firewalls
-- [Palo Alto CN-Series](https://docs.paloaltonetworks.com/cn-series) -- container-native NGFW for Kubernetes
-- [Palo Alto CN-Series as Kubernetes CNF](https://docs.paloaltonetworks.com/cn-series/deployment/cn-deployment/deployment-modes-of-cn-series-firewalls/deploy-the-cn-series-firewall-as-a-kubernetes-cnf)
-- [F5 BIG-IP Next for Kubernetes](https://www.f5.com/products/big-ip/next/big-ip-next-for-kubernetes) -- CNF firewall + DDoS + IPS
-- [F5 BIG-IP Next Edge Firewall CNF](https://community.f5.com/kb/technicalarticles/big-ip-next-edge-firewall-cnf-for-edge-workloads/344223)
-
-### Service Function Chaining
-- [Network Service Mesh (NSM)](https://networkservicemesh.io/) -- CNCF Sandbox, L2/L3 SFC for Kubernetes
-- [SFC Design with NSM (Springer)](https://link.springer.com/chapter/10.1007/978-3-031-10419-0_8)
-- [SDN-Based SFC with NSM (IEEE)](https://ieeexplore.ieee.org/document/10811207/)
+- [Palo Alto CN-Series](https://docs.paloaltonetworks.com/cn-series)
+- [CN-Series as Kubernetes CNF](https://docs.paloaltonetworks.com/cn-series/deployment/cn-deployment/deployment-modes-of-cn-series-firewalls/deploy-the-cn-series-firewall-as-a-kubernetes-cnf)
+- [F5 BIG-IP Next for Kubernetes](https://www.f5.com/products/big-ip/next/big-ip-next-for-kubernetes)
+- [Network Service Mesh (NSM)](https://networkservicemesh.io/) -- CNCF Sandbox, L2/L3 SFC
 
 ### Firewall Appliance Operators
-- [turnbros/opnsense-operator](https://github.com/turnbros/opnsense-operator) -- K8s operator for OPNsense (alpha)
-- [fortinet/k8s-fortigate-ctrl](https://github.com/fortinet/k8s-fortigate-ctrl) -- K8s controller for FortiGate (alpha demo)
-- [Calico + FortiGate integration](https://docs.tigera.io/calico-cloud/network-policy/policy-firewalls/fortinet-integration/firewall-integration) (deprecated)
-- [Crossplane + FortiGate concept](https://hoop.dev/blog/what-crossplane-fortigate-actually-does-and-when-to-use-it) (no actual provider exists)
-
-### Cloud-Managed
-- [Aviatrix DCF for Kubernetes](https://docs.aviatrix.com/docs/enterprise/8.2/guides/security/dcf/dcf-kubernetes) -- distributed cloud firewall with CRDs (cloud-only)
+- [turnbros/opnsense-operator](https://github.com/turnbros/opnsense-operator) (alpha)
+- [fortinet/k8s-fortigate-ctrl](https://github.com/fortinet/k8s-fortigate-ctrl) (alpha)
+- [Aviatrix DCF for Kubernetes](https://docs.aviatrix.com/docs/enterprise/8.2/guides/security/dcf/dcf-kubernetes) (cloud-only)
