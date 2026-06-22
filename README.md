@@ -28,6 +28,7 @@ This repository contains manifests and notes for deploying [Kube-OVN](https://ku
 
 | Component     | Version    | Role                                    |
 |---------------|------------|-----------------------------------------|
+| Lima          | latest     | macOS VM manager (openSUSE Leap guest)   |
 | RKE2          | latest     | Base Kubernetes distribution             |
 | Rancher Prime | 2.14.x     | Cluster management UI                   |
 | k3k           | latest     | Virtual Kubernetes clusters              |
@@ -35,17 +36,58 @@ This repository contains manifests and notes for deploying [Kube-OVN](https://ku
 
 ## Prerequisites
 
-- An RKE2 cluster up and running (single or multi-node)
+- [Lima](https://lima-vm.io/) (for Mac development) or a bare-metal/VM Linux host
 - `kubectl` and `helm` CLI tools
 - Storage class available (for k3k etcd persistence)
-- For Mac (aarch64) testing: ensure images support `linux/arm64`
 
-## Quick Start
+## Quick Start (Lima on Mac)
+
+The included Lima template provisions an openSUSE Leap VM with the full stack (RKE2 + Rancher + k3k) automatically.
+
+```bash
+limactl create --name k3k-kube-ovn lima/k3k-kube-ovn.yaml
+limactl start k3k-kube-ovn
+```
+
+Once the VM is ready, Rancher is available at:
+
+> **https://rancher.k3k-kube-ovn.localhost**
+
+### How DNS Works
+
+- `*.localhost` resolves to `127.0.0.1` on macOS ([RFC 6761](https://www.rfc-editor.org/rfc/rfc6761))
+- Lima auto-forwards guest ports 80/443/6443 to `127.0.0.1` on the Mac host
+- The Rancher Helm install sets `hostname=rancher.$(hostname -s).localhost` -- the Lima VM hostname defaults to the instance name (`k3k-kube-ovn`)
+- No `/etc/hosts` editing required -- your browser resolves it natively
+
+### Accessing the Cluster
+
+```bash
+# Shell into the VM
+limactl shell k3k-kube-ovn
+
+# kubectl is pre-configured
+kubectl get nodes
+kubectl -n cattle-system get pods
+kubectl -n k3k-system get pods
+```
+
+Or from the Mac host directly (port 6443 is forwarded):
+
+```bash
+# Copy kubeconfig from the VM
+limactl shell k3k-kube-ovn sudo cat /etc/rancher/rke2/rke2.yaml | \
+  sed 's/127.0.0.1/127.0.0.1/' > ~/.kube/k3k-kube-ovn.yaml
+
+export KUBECONFIG=~/.kube/k3k-kube-ovn.yaml
+kubectl get nodes
+```
+
+## Quick Start (Manual)
 
 ### 1. Install RKE2
 
 ```bash
-# On the first node (server)
 curl -sfL https://get.rke2.io | sh -
 systemctl enable rke2-server --now
 ```
@@ -62,10 +104,10 @@ kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/do
 helm repo add rancher-stable https://releases.rancher.com/server-charts/stable
 helm repo update
 
-# Install Rancher
+# Install Rancher (replace hostname with your DNS)
 helm install rancher rancher-stable/rancher \
   --namespace cattle-system --create-namespace \
-  --set hostname=rancher.example.com \
+  --set hostname=rancher.k3k-kube-ovn.localhost \
   --set bootstrapPassword=admin \
   --set replicas=1
 ```
@@ -122,8 +164,11 @@ KUBECONFIG=kubeconfig-virtual.yaml kubectl apply -f manifests/kube-ovn/helmchart
 .
 ├── README.md                          # This file
 ├── GEMINI.md                          # Instructions for Gemini AI assistant
+├── lima/
+│   └── k3k-kube-ovn.yaml             # Lima VM template (openSUSE Leap + full stack)
 ├── manifests/
 │   ├── k3k/
+│   │   ├── namespace.yaml             # Namespace for the virtual cluster
 │   │   └── cluster.yaml               # k3k virtual cluster definition
 │   └── kube-ovn/
 │       ├── helmchart.yaml             # HelmChart CRD for k3s Helm controller
@@ -168,6 +213,7 @@ kubectl -n k3k-system logs deploy/k3k-controller-manager
 
 ## References
 
+- [Lima VM](https://lima-vm.io/) -- lightweight Linux VMs on macOS
 - [Kube-OVN Documentation](https://kubeovn.github.io/docs/stable/en/)
 - [k3k GitHub](https://github.com/rancher/k3k)
 - [RKE2 Helm Controller](https://docs.rke2.io/add-ons/helm)
