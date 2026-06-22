@@ -9,5 +9,5 @@ spec:
     - "10.16.0.1"
   namespaces:
     - "k3k-kube-ovn-cluster"
-  private: true
+  private: false
   vlan: ""

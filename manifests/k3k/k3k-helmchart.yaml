@@ -1,0 +1,10 @@
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: k3k
+  namespace: kube-system
+spec:
+  chart: k3k
+  repo: https://rancher.github.io/k3k
+  targetNamespace: k3k-system
+  createNamespace: true

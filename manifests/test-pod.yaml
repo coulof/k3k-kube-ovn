@@ -1,0 +1,34 @@
+# Test Pod Manifest for Kube-OVN & k3k Verification
+#
+# Usage:
+# 1. Deploy the test pod into the guest cluster namespace on the host to verify host-level Subnet mapping:
+#    kubectl apply -f manifests/test-pod.yaml -n k3k-kube-ovn-cluster
+#
+# 2. Check the allocated IP address (it should be in the 10.16.0.0/16 range):
+#    kubectl get pod test-pod -n k3k-kube-ovn-cluster -o wide
+#
+# 3. Test external connectivity (e.g., to the Kubernetes API server):
+#    kubectl exec -it test-pod -n k3k-kube-ovn-cluster -- ping -c 3 10.43.0.1
+#
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod
+  labels:
+    app: test-connectivity
+spec:
+  containers:
+    - name: alpine
+      image: alpine:latest
+      command:
+        - sh
+        - -c
+        - "echo 'Test pod started successfully!'; tail -f /dev/null"
+      resources:
+        limits:
+          cpu: "100m"
+          memory: "64Mi"
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+  restartPolicy: Always

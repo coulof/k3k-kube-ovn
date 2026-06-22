@@ -17,6 +17,10 @@ cpus: 4
 memory: "8GiB"
 disk: "40GiB"
 
+mounts:
+  - location: "~"
+    writable: false
+
 # Forward 80 and 443 from the guest to the Mac host on 127.0.0.1
 # *.localhost resolves to 127.0.0.1 on macOS (RFC 6761)
 portForwards:
@@ -152,28 +156,83 @@ provision:
       done
       kubectl -n cert-manager wait --for=condition=Available deploy --all --timeout=300s
 
-      # [DEFERRED] Rancher is not installed at this phase (by user request)
-      # # Install Rancher
-      # # The hostname uses the Lima instance name: rancher.<instance>.localhost
-      # if ! kubectl get ns cattle-system &>/dev/null; then
-      #   echo "Installing Rancher..."
-      #   helm repo add rancher-stable https://releases.rancher.com/server-charts/stable
-      #   helm repo update
-      #   helm install rancher rancher-stable/rancher \
-      #     --namespace cattle-system --create-namespace \
-      #     --set hostname=rancher.$(hostname -s).localhost \
-      #     --set bootstrapPassword=admin \
-      #     --set replicas=1
-      # fi
+      # Locate the manifests folder dynamically from the mounted host directory
+      PROJECT_DIR=$(find /Users /home -maxdepth 4 -type d -name "k3k-kube-ovn" 2>/dev/null | head -n 1)
+      if [ -n "$PROJECT_DIR" ]; then
+        echo "Found mounted project directory at: ${PROJECT_DIR}"
+        MANIFESTS_DIR="${PROJECT_DIR}/manifests"
+        mkdir -p /var/lib/rancher/rke2/server/manifests
 
-      # Install k3k
-      if ! kubectl get ns k3k-system &>/dev/null; then
-        echo "Installing k3k..."
-        helm repo add k3k https://rancher.github.io/k3k
-        helm repo update
-        helm install k3k k3k/k3k \
-          --namespace k3k-system --create-namespace
+        # 1. Copy the k3k HelmChart manifest
+        if [ -f "${MANIFESTS_DIR}/k3k/k3k-helmchart.yaml" ]; then
+          echo "Copying k3k HelmChart auto-deploy manifest from mount..."
+          cp "${MANIFESTS_DIR}/k3k/k3k-helmchart.yaml" /var/lib/rancher/rke2/server/manifests/k3k-helmchart.yaml
+        fi
+
+        # 2. Copy the namespace manifest
+        if [ -f "${MANIFESTS_DIR}/k3k/namespace.yaml" ]; then
+          echo "Copying namespace manifest from mount..."
+          cp "${MANIFESTS_DIR}/k3k/namespace.yaml" /var/lib/rancher/rke2/server/manifests/k3k-namespace.yaml
+        fi
+
+        # 3. Copy the subnet manifest
+        if [ -f "${MANIFESTS_DIR}/kube-ovn/subnet.yaml" ]; then
+          echo "Copying subnet manifest from mount..."
+          cp "${MANIFESTS_DIR}/kube-ovn/subnet.yaml" /var/lib/rancher/rke2/server/manifests/k3k-subnet.yaml
+        fi
+
+        # 4. Copy the cluster manifest
+        if [ -f "${MANIFESTS_DIR}/k3k/cluster.yaml" ]; then
+          echo "Copying cluster manifest from mount..."
+          cp "${MANIFESTS_DIR}/k3k/cluster.yaml" /var/lib/rancher/rke2/server/manifests/k3k-cluster.yaml
+        fi
+
+        # 5. Copy and configure the Rancher Prime manifest
+        if [ -f "${MANIFESTS_DIR}/rancher/rancher-helmchart.yaml" ]; then
+          echo "Copying and configuring Rancher Prime manifest from mount..."
+          RANCHER_HOSTNAME="rancher.$(hostname -s).localhost"
+          sed "s/__HOSTNAME__/${RANCHER_HOSTNAME}/g" "${MANIFESTS_DIR}/rancher/rancher-helmchart.yaml" > /var/lib/rancher/rke2/server/manifests/rancher-helmchart.yaml
+        fi
+      else
+        echo "WARNING: Could not locate k3k-kube-ovn project directory. Using fallback for k3k and Rancher Prime installation."
+        mkdir -p /var/lib/rancher/rke2/server/manifests
+        cat <<'EOF' | sed 's/^[[:space:]]\{8\}//' > /var/lib/rancher/rke2/server/manifests/k3k-helmchart.yaml
+        apiVersion: helm.cattle.io/v1
+        kind: HelmChart
+        metadata:
+          name: k3k
+          namespace: kube-system
+        spec:
+          chart: k3k
+          repo: https://rancher.github.io/k3k
+          targetNamespace: k3k-system
+          createNamespace: true
+        EOF
+
+        RANCHER_HOSTNAME="rancher.$(hostname -s).localhost"
+        cat <<EOF | sed 's/^[[:space:]]\{8\}//' > /var/lib/rancher/rke2/server/manifests/rancher-helmchart.yaml
+        apiVersion: helm.cattle.io/v1
+        kind: HelmChart
+        metadata:
+          name: rancher
+          namespace: kube-system
+        spec:
+          chart: rancher
+          repo: https://charts.rancher.com/server-charts/prime
+          targetNamespace: cattle-system
+          createNamespace: true
+          valuesContent: |-
+            hostname: ${RANCHER_HOSTNAME}
+            bootstrapPassword: admin
+            replicas: 1
+        EOF
       fi
+
+      echo "Waiting for k3k namespace and deployments to be available..."
+      until kubectl get ns k3k-system &>/dev/null; do
+        sleep 5
+      done
+      kubectl -n k3k-system wait --for=condition=Available deploy --all --timeout=300s
 
       # Install and configure bash-completion (Best Practice: Static, system-wide generation)
       if ! rpm -q bash-completion &>/dev/null; then
