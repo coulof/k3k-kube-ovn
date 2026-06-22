@@ -1,0 +1,20 @@
+apiVersion: k3k.io/v1beta1
+kind: Cluster
+metadata:
+  name: kube-ovn-cluster
+  namespace: k3k-kube-ovn-cluster
+spec:
+  mode: shared
+  servers: 1
+  agents: 0
+  # Use CIDRs that don't overlap with the RKE2 host cluster (10.42.0.0/16, 10.43.0.0/16)
+  clusterCIDR: "10.16.0.0/16"
+  serviceCIDR: "10.96.0.0/12"
+  clusterDNS: "10.96.0.10"
+  persistence:
+    type: dynamic
+    storageRequestSize: 2Gi
+  # Disable the default k3s CNI so Kube-OVN can take over
+  serverArgs:
+    - "--flannel-backend=none"
+    - "--disable-network-policy"
