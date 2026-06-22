@@ -1,0 +1,6 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: k3k-kube-ovn-centralized-cluster
+  annotations:
+    ovn.kubernetes.io/logical_switch: "k3k-kube-ovn-centralized-subnet"

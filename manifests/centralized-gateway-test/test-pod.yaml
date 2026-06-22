@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod-centralized
+  labels:
+    app: test-connectivity-centralized
+spec:
+  containers:
+    - name: alpine
+      image: alpine:latest
+      command:
+        - sh
+        - -c
+        - "echo 'Centralized test pod started successfully!'; tail -f /dev/null"
+      resources:
+        limits:
+          cpu: "100m"
+          memory: "64Mi"
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+  restartPolicy: Always

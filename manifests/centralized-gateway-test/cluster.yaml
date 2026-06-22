@@ -1,0 +1,18 @@
+apiVersion: k3k.io/v1beta1
+kind: Cluster
+metadata:
+  name: kube-ovn-centralized-cluster
+  namespace: k3k-kube-ovn-centralized-cluster
+spec:
+  mode: shared
+  servers: 1
+  agents: 0
+  # Use CIDRs that don't overlap with the distributed gateway subnet (10.16.0.0/16, 10.96.0.0/12)
+  clusterCIDR: "10.17.0.0/16"
+  serviceCIDR: "10.97.0.0/12"
+  clusterDNS: "10.97.0.10"
+  persistence:
+    type: none
+  serverArgs:
+    - "--flannel-backend=none"
+    - "--disable-network-policy"

@@ -1,0 +1,15 @@
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: k3k-kube-ovn-centralized-subnet
+spec:
+  cidrBlock: "10.17.0.0/16"
+  gateway: "10.17.0.1"
+  excludeIps:
+    - "10.17.0.1"
+  namespaces:
+    - "k3k-kube-ovn-centralized-cluster"
+  private: false
+  gatewayType: centralized
+  gatewayNode: "lima-k3k-kube-ovn"
+  natOutgoing: true
