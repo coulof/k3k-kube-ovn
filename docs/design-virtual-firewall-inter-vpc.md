@@ -364,6 +364,58 @@ The VRRP pattern is the simplest and most commonly supported by firewall applian
 
 For arm64 development on MacBook Pro, VyOS is the safest choice.
 
+## Controller-Managed Alternatives to a Manually Operated Firewall VM
+
+Rather than manually configuring a VyOS or pfSense VM, several projects aim to manage firewall logic via Kubernetes CRDs or controllers. None is a perfect turnkey fit for Harvester + Kube-OVN inter-VPC today, but they represent the landscape.
+
+### Kubernetes-Native CNF Firewalls (runs inside the cluster)
+
+These deploy as containers/pods and inspect traffic inline via CNI chaining or service function chaining -- no separate VM to manage.
+
+| Project | What it does | Maturity | Harvester fit |
+|---|---|---|---|
+| **[Palo Alto CN-Series](https://docs.paloaltonetworks.com/cn-series)** | Container-native NGFW. CRD-based policy. L7 App-ID, IPS, DNS Security. Inspects east-west pod traffic via CNI chaining. | Production (commercial) | Best fit -- deploys as pods, CRD-managed security-as-code |
+| **[F5 BIG-IP Next for Kubernetes](https://www.f5.com/products/big-ip/next/big-ip-next-for-kubernetes)** | CNF firewall + DDoS + IPS. Helm + F5 Lifecycle Operator (FLO). CRD-managed. | Production (commercial, telco-focused) | Heavy; designed for north-south 5G workloads |
+| **[Network Service Mesh (NSM)](https://networkservicemesh.io/)** | CNCF Sandbox project. L2/L3 service function chaining: compose chains like `pod → firewall → pod`. Supports OVS forwarder. | Sandbox (v1.5) | Promising for SFC; no turnkey firewall included -- bring your own VNF (nftables, Suricata, etc.) |
+
+CN-Series is the most production-proven. It inserts as a CNI chain element and inspects traffic inline -- the firewall is fully managed via CRDs with no manual appliance configuration.
+
+NSM is the open-source path: it provides the plumbing (service function chains over OVS/kernel) and you plug in a containerized firewall. Research papers demonstrate firewall + IDS chains on multi-node clusters ([Springer](https://link.springer.com/chapter/10.1007/978-3-031-10419-0_8), [IEEE](https://ieeexplore.ieee.org/document/10811207/)).
+
+### Operators That Manage External Firewall Appliances via API
+
+These wrap a traditional firewall (VM or physical) with a Kubernetes operator that reconciles CRDs into API calls to the appliance.
+
+| Project | What it does | Maturity | Link |
+|---|---|---|---|
+| **[turnbros/opnsense-operator](https://github.com/turnbros/opnsense-operator)** | K8s operator managing OPNsense via REST API. CRDs: `FirewallAlias`, `FirewallFilter`, `ClusterNodeAlias`. | Alpha (5 stars, dormant) | [GitHub](https://github.com/turnbros/opnsense-operator) |
+| **[fortinet/k8s-fortigate-ctrl](https://github.com/fortinet/k8s-fortigate-ctrl)** | K8s controller configuring FortiGate as LB via FortiOS API. CRDs for FortiGate instances. | Alpha ("demo code") | [GitHub](https://github.com/fortinet/k8s-fortigate-ctrl) |
+| **[Calico/Tigera + FortiGate](https://docs.tigera.io/calico-cloud/network-policy/policy-firewalls/fortinet-integration/firewall-integration)** | `tigera-firewall-controller` syncs Calico GlobalNetworkPolicy → FortiGate address groups. Egress only. | **Deprecated** | [Docs](https://docs.tigera.io/calico-cloud/network-policy/policy-firewalls/fortinet-integration/firewall-integration) |
+| **Crossplane + FortiGate** | Theoretical pattern: Crossplane provider maps FortiGate API to K8s CRDs. | **No actual provider exists** -- articles describe the concept, not a shipped product | [Article](https://hoop.dev/blog/what-crossplane-fortigate-actually-does-and-when-to-use-it) |
+
+The opnsense-operator is the closest to "manage a firewall as a controller" in the open-source world, but it is early-stage and dormant. Building a custom operator for VyOS (which has a REST API) or OPNsense is a bounded project following the standard operator pattern: watch CRDs → reconcile → push config to appliance API.
+
+### Cloud-Managed Distributed Firewalls with CRDs
+
+| Project | What it does | Maturity | Harvester fit |
+|---|---|---|---|
+| **[Aviatrix DCF for Kubernetes](https://docs.aviatrix.com/docs/enterprise/8.2/guides/security/dcf/dcf-kubernetes)** | Distributed Cloud Firewall. CRD-based policies. Controls egress, ingress, **and east-west** across VPCs/clusters/VMs. SmartGroups for identity-based policy. | Production (commercial) | **Cloud-only** (AWS/Azure/GCP); not on-premise |
+
+Aviatrix is the most feature-complete for inter-VPC firewall-as-code, but it is a SaaS/cloud product and does not run on bare-metal Harvester.
+
+### What About Traefik / Ingress Controllers?
+
+Traefik operates at L7 HTTP ingress -- its middleware (WAF via CrowdSec/Coraza, IP allowlists, rate limiting) is useful for north-south web traffic but does not handle L3/L4 east-west inter-VPC routing or non-HTTP protocols. Not the right tool for this use case.
+
+### Recommendation for Harvester
+
+| Priority | Approach | Effort | Result |
+|---|---|---|---|
+| **1 (commercial)** | Palo Alto CN-Series | Deploy + license | CRD-managed NGFW, no VM to operate, inline east-west inspection |
+| **2 (open-source, assembly required)** | NSM + containerized firewall (nftables/Suricata) | Medium -- NSM setup + custom VNF container | Service function chain, no VM, but requires building the firewall container and chain config |
+| **3 (open-source, VM-based)** | OPNsense/VyOS VM + fork opnsense-operator (or build custom) | Medium -- VM setup + operator development | Traditional firewall with CRD management layer; operator is a bounded coding project |
+| **4 (manual, lowest effort)** | VyOS/OPNsense VM with manual config (Option A/B/C above) | Low -- just deploy and configure | Works today but no GitOps, no CRD reconciliation |
+
 ## Open Questions and Limitations
 
 1. **Multiple vpcPeerings on one VPC:** The `vpcPeerings` field is an array, but the docs only confirm bilateral (2 VPC) peering. Whether a single VPC can maintain N simultaneous peerings is **not explicitly documented**. This is the design's biggest risk -- test with 3+ VPCs before committing.
@@ -378,11 +430,32 @@ For arm64 development on MacBook Pro, VyOS is the safest choice.
 
 ## References
 
+### Kube-OVN / Harvester
 - [Kube-OVN VPC](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc/) -- static routes, policy routes
 - [Kube-OVN VPC Peering](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc-peering/) -- bilateral interconnect via 169.254.x.x
 - [Kube-OVN VPC Egress Gateway](https://kubeovn.github.io/docs/v1.16.x/en/vpc/vpc-egress-gateway/) -- external-only, not inter-VPC
+- [Kube-OVN Multi-Network Policy](https://kubeovn.github.io/docs/v1.16.x/en/guide/multi-network-policy/) -- scoping policies to specific NICs
 - [kubeovn/kube-ovn#6229](https://github.com/kubeovn/kube-ovn/issues/6229) -- multi-VPC centralized access request (open)
 - [harvester/harvester#4400](https://github.com/harvester/harvester/issues/4400) -- firewall VM on Harvester (closed, pre-KubeOVN)
 - [harvester/harvester#7397](https://github.com/harvester/harvester/issues/7397) -- SDN Epic (Phase 1)
 - [Harvester kube-ovn-operator](https://docs.harvesterhci.io/v1.8/advanced/addons/kubeovn-operator)
-- [Kube-OVN Multi-Network Policy](https://kubeovn.github.io/docs/v1.16.x/en/guide/multi-network-policy/) -- scoping policies to specific NICs
+
+### CNF Firewalls
+- [Palo Alto CN-Series](https://docs.paloaltonetworks.com/cn-series) -- container-native NGFW for Kubernetes
+- [Palo Alto CN-Series as Kubernetes CNF](https://docs.paloaltonetworks.com/cn-series/deployment/cn-deployment/deployment-modes-of-cn-series-firewalls/deploy-the-cn-series-firewall-as-a-kubernetes-cnf)
+- [F5 BIG-IP Next for Kubernetes](https://www.f5.com/products/big-ip/next/big-ip-next-for-kubernetes) -- CNF firewall + DDoS + IPS
+- [F5 BIG-IP Next Edge Firewall CNF](https://community.f5.com/kb/technicalarticles/big-ip-next-edge-firewall-cnf-for-edge-workloads/344223)
+
+### Service Function Chaining
+- [Network Service Mesh (NSM)](https://networkservicemesh.io/) -- CNCF Sandbox, L2/L3 SFC for Kubernetes
+- [SFC Design with NSM (Springer)](https://link.springer.com/chapter/10.1007/978-3-031-10419-0_8)
+- [SDN-Based SFC with NSM (IEEE)](https://ieeexplore.ieee.org/document/10811207/)
+
+### Firewall Appliance Operators
+- [turnbros/opnsense-operator](https://github.com/turnbros/opnsense-operator) -- K8s operator for OPNsense (alpha)
+- [fortinet/k8s-fortigate-ctrl](https://github.com/fortinet/k8s-fortigate-ctrl) -- K8s controller for FortiGate (alpha demo)
+- [Calico + FortiGate integration](https://docs.tigera.io/calico-cloud/network-policy/policy-firewalls/fortinet-integration/firewall-integration) (deprecated)
+- [Crossplane + FortiGate concept](https://hoop.dev/blog/what-crossplane-fortigate-actually-does-and-when-to-use-it) (no actual provider exists)
+
+### Cloud-Managed
+- [Aviatrix DCF for Kubernetes](https://docs.aviatrix.com/docs/enterprise/8.2/guides/security/dcf/dcf-kubernetes) -- distributed cloud firewall with CRDs (cloud-only)
