@@ -21,6 +21,9 @@ mounts:
   - location: "~"
     writable: false
 
+networks:
+  - lima: user-v2
+
 # Forward Kubernetes API (optional, for direct kubectl access from Mac)
 portForwards:
   - guestPort: 6443
@@ -215,35 +218,97 @@ provision:
       #!/bin/bash
       set -eux -o pipefail
 
-      # Run user convenience steps as the 'lima' user to bypass /mnt/lima-cidata permissions
-      sudo -H -u lima bash <<'EOF'
-      set -eux -o pipefail
-
-      # Convenience: make kubectl available without sudo
-      mkdir -p ~/.kube
-      if [ ! -f ~/.kube/config ]; then
-        sudo cp /etc/rancher/rke2/rke2.yaml ~/.kube/config
-        sudo chown $(id -u):$(id -g) ~/.kube/config
-        sed -i "s/127.0.0.1/$(hostname -I | awk '{print $1}')/g" ~/.kube/config
-      fi
-
-      # Keep a copy with 127.0.0.1 for macOS host control via forwarded port 6443
-      if [ ! -f ~/.kube/config-mac ]; then
-        sudo cp /etc/rancher/rke2/rke2.yaml ~/.kube/config-mac
-        sudo chown $(id -u):$(id -g) ~/.kube/config-mac
-      fi
-
-      # Add RKE2 bins to PATH
-      grep -q 'rancher/rke2/bin' ~/.bashrc || \
-        echo 'export PATH=$PATH:/var/lib/rancher/rke2/bin' >> ~/.bashrc
+      # Set system-wide kubeconfig and PATH for RKE2 to bypass host mounts conflicts
+      chmod 644 /etc/rancher/rke2/rke2.yaml
+      cat <<'EOF' > /etc/profile.d/rke2.sh
+      export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+      export PATH=$PATH:/var/lib/rancher/rke2/bin
+      EOF
+      chmod +x /etc/profile.d/rke2.sh
 
       # Fallback TERM if terminfo is missing (e.g., for Ghostty)
-      grep -q 'ghostty' ~/.bashrc || cat <<'BASHRC' >> ~/.bashrc
+      sudo -H -u lima bash <<'EOF'
+      set -eux -o pipefail
+      if [ -w ~/.bashrc ]; then
+        grep -q 'ghostty' ~/.bashrc || cat <<'BASHRC' >> ~/.bashrc
       if [[ "$TERM" == *"ghostty"* ]] && ! infocmp "$TERM" &>/dev/null; then
         export TERM=xterm-256color
       fi
       BASHRC
+      fi
       EOF
+
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+
+      # Ensure socat is installed (required for forwarding loopback traffic to Rancher Prime)
+      if ! command -v socat &>/dev/null; then
+        echo "Installing socat..."
+        zypper --non-interactive install -y socat || true
+      fi
+
+      # Set up a systemd service to dynamically synchronize the IP of 'lima-rancher-prime.internal'
+      # to 'lima-rancher-prime.localhost' inside the VM's /etc/hosts AND set up a socat port forwarder
+      # to bypass hardcoded .localhost loopback resolution constraints in modern clients.
+      cat <<'EOF' > /usr/local/bin/rancher-hosts-sync.sh
+      #!/bin/bash
+      CURRENT_IP=""
+      SOCAT_PID=""
+
+      cleanup() {
+        if [ -n "$SOCAT_PID" ]; then
+          kill "$SOCAT_PID" 2>/dev/null || true
+        fi
+        exit 0
+      }
+      trap cleanup SIGTERM SIGINT
+
+      while true; do
+        # Try to resolve lima-rancher-prime.internal
+        IP=$(getent hosts lima-rancher-prime.internal | awk '{print $1}')
+        if [ -n "$IP" ]; then
+          # 1. Update /etc/hosts
+          if ! grep -q "$IP lima-rancher-prime.localhost" /etc/hosts; then
+            echo "Updating /etc/hosts: mapping lima-rancher-prime.localhost to $IP"
+            sed -i '/lima-rancher-prime.localhost/d' /etc/hosts
+            echo "$IP lima-rancher-prime.localhost" >> /etc/hosts
+          fi
+
+          # 2. Update socat port forwarder
+          if [ "$IP" != "$CURRENT_IP" ]; then
+            echo "Detected IP change for Rancher: $CURRENT_IP -> $IP"
+            if [ -n "$SOCAT_PID" ]; then
+              kill "$SOCAT_PID" 2>/dev/null || true
+            fi
+            /usr/bin/socat TCP-LISTEN:443,fork,bind=127.0.0.1 TCP:$IP:443 &
+            SOCAT_PID=$!
+            CURRENT_IP=$IP
+          fi
+        fi
+        sleep 10
+      done
+      EOF
+      chmod +x /usr/local/bin/rancher-hosts-sync.sh
+
+      cat <<'EOF' > /etc/systemd/system/rancher-hosts-sync.service
+      [Unit]
+      Description=Rancher Prime Hosts Dynamic Sync
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/bin/rancher-hosts-sync.sh
+      Restart=always
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+
+      systemctl daemon-reload
+      systemctl enable --now rancher-hosts-sync.service
 
 
 

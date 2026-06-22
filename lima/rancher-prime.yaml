@@ -1,0 +1,205 @@
+# Lima VM template for SUSE Rancher Prime + K3s
+# Usage:
+#   limactl create --name rancher-prime lima/rancher-prime.yaml
+#   limactl start rancher-prime
+#   limactl shell rancher-prime
+#
+
+images:
+  - location: https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.x86_64-Cloud.qcow2
+    arch: x86_64
+  - location: https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.aarch64-Cloud.qcow2
+    arch: aarch64
+
+cpus: 4
+memory: "8GiB"
+disk: "40GiB"
+
+mountType: "reverse-sshfs"
+mounts:
+  - location: "~"
+    writable: false
+
+networks:
+  - lima: user-v2
+
+# Forward Kubernetes API and Rancher Prime HTTPS UI
+# Use port 6444 for K3s API to prevent conflicts with RKE2 host's port 6443
+portForwards:
+  - guestPort: 6443
+    hostPort: 6444
+    hostIP: "127.0.0.1"
+  - guestPort: 443
+    hostPort: 8443
+    hostIP: "127.0.0.1"
+  - guestPort: 80
+    hostPort: 8080
+    hostIP: "127.0.0.1"
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+
+      # Install sshfs to support reverse-sshfs host folder mounts if not present
+      if ! command -v sshfs &>/dev/null; then
+        echo "Installing sshfs..."
+        zypper --non-interactive install -y sshfs
+        echo "Restarting lima-guestagent to establish mounts..."
+        systemctl restart lima-guestagent || true
+      fi
+
+      # Disable firewalld on SUSE/openSUSE to prevent CNI routing and port conflicts
+      if systemctl is-enabled --quiet firewalld &>/dev/null || systemctl is-active --quiet firewalld &>/dev/null; then
+        echo "Disabling firewalld..."
+        systemctl disable --now firewalld || true
+      fi
+
+      # Ensure IP forwarding is enabled
+      sysctl -w net.ipv4.ip_forward=1
+      echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/90-k3s-ip-forward.conf
+
+      # Install K3s (with default Traefik controller, write-kubeconfig-mode 644, and custom TLS SANs)
+      if ! command -v k3s &>/dev/null; then
+        echo "Installing K3s..."
+        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--write-kubeconfig-mode 644 --tls-san=lima-rancher-prime.localhost --tls-san=localhost" sh -
+      fi
+
+      # Wait for K3s kubectl binary to be available
+      echo "Waiting for K3s kubectl binary..."
+      until [ -f /usr/local/bin/kubectl ]; do
+        sleep 5
+      done
+
+      # Wait for K3s node and API server to be ready
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      echo "Waiting for Kubernetes API server..."
+      until kubectl get nodes &>/dev/null; do
+        sleep 5
+      done
+
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+      # 1. Install Helm
+      if ! command -v helm &>/dev/null; then
+        echo "Installing Helm..."
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      fi
+
+      # 2. Locate the manifests folder dynamically from the mounted host directory
+      PROJECT_DIR=$(find /Users /home -maxdepth 6 -type d -not -path "*/.*" -name "k3k-kube-ovn" 2>/dev/null | head -n 1 || true)
+      if [ -z "${PROJECT_DIR}" ]; then
+        echo "ERROR: Could not locate k3k-kube-ovn project directory in mounted volumes." >&2
+        exit 1
+      fi
+      echo "Found mounted project directory at: ${PROJECT_DIR}"
+
+      # 3. Securely read Rancher Prime bootstrap password from .env on host
+      RANCHER_BOOTSTRAP_PASSWORD=""
+      if [ -f "${PROJECT_DIR}/.env" ]; then
+        echo "Sourcing .env from ${PROJECT_DIR}/.env"
+        RANCHER_BOOTSTRAP_PASSWORD=$(grep -E '^RANCHER_BOOTSTRAP_PASSWORD=' "${PROJECT_DIR}/.env" | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+      fi
+
+      if [ -z "${RANCHER_BOOTSTRAP_PASSWORD}" ]; then
+        echo "WARNING: RANCHER_BOOTSTRAP_PASSWORD is not set in .env. Using fallback password."
+        RANCHER_BOOTSTRAP_PASSWORD="DefaultSecurePassword123!"
+      fi
+
+      # 4. Install cert-manager (prerequisite for Rancher)
+      echo "Installing cert-manager..."
+      helm repo add jetstack https://charts.jetstack.io
+      helm repo update
+      helm upgrade --install cert-manager jetstack/cert-manager \
+        --namespace cert-manager \
+        --create-namespace \
+        --set crds.enabled=true \
+        --set installCRDs=true
+
+      echo "Waiting for cert-manager deployments to be ready..."
+      kubectl -n cert-manager wait --for=condition=Available deploy --all --timeout=300s
+
+      # 5. Create cattle-system namespace for Rancher (SUSE install guide step 2)
+      if ! kubectl get ns cattle-system &>/dev/null; then
+        echo "Creating cattle-system namespace..."
+        kubectl create namespace cattle-system
+      fi
+
+      # 6. Add Rancher Prime repository and install Rancher Prime via Helm
+      echo "Installing Rancher Prime..."
+      helm repo add rancher-prime https://charts.rancher.com/server-charts/prime
+      helm repo update
+      helm upgrade --install rancher rancher-prime/rancher \
+        --namespace cattle-system \
+        --set hostname=lima-rancher-prime.localhost \
+        --set bootstrapPassword="${RANCHER_BOOTSTRAP_PASSWORD}" \
+        --set replicas=1 \
+        --set ingress.ingressClassName=traefik \
+        --timeout=600s
+
+      # 7. Wait for Rancher deployment rollout
+      echo "Waiting for Rancher Prime rollout to complete..."
+      kubectl -n cattle-system rollout status deployment/rancher --timeout=600s
+
+      # 8. Install and configure bash-completion
+      if ! rpm -q bash-completion &>/dev/null; then
+        echo "Installing bash-completion..."
+        zypper --non-interactive install -y bash-completion
+      fi
+
+      echo "Generating kubectl and helm system-wide bash completions..."
+      mkdir -p /usr/share/bash-completion/completions
+      /usr/local/bin/kubectl completion bash > /usr/share/bash-completion/completions/kubectl
+      /usr/local/bin/helm completion bash > /usr/share/bash-completion/completions/helm
+
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+
+      # Set system-wide kubeconfig and PATH for K3s to bypass host mounts conflicts
+      cat <<'EOF' > /etc/profile.d/k3s.sh
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      export PATH=$PATH:/usr/local/bin
+      EOF
+      chmod +x /etc/profile.d/k3s.sh
+
+      # Fallback TERM if terminfo is missing (e.g., for Ghostty)
+      sudo -H -u lima bash <<'EOF'
+      set -eux -o pipefail
+      if [ -w ~/.bashrc ]; then
+        grep -q 'ghostty' ~/.bashrc || cat <<'BASHRC' >> ~/.bashrc
+      if [[ "$TERM" == *"ghostty"* ]] && ! infocmp "$TERM" &>/dev/null; then
+        export TERM=xterm-256color
+      fi
+      BASHRC
+      fi
+      EOF
+
+probes:
+  - description: "K3s is ready"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      if ! timeout 30s bash -c "until test -f /etc/rancher/k3s/k3s.yaml; do sleep 3; done"; then
+        echo >&2 "k3s is not ready yet"
+        exit 1
+      fi
+    hint: |
+      K3s is still starting up. Wait a few minutes and try again.
+  - description: "Rancher Prime is running"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      if ! timeout 30s bash -c "until sudo /usr/local/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n cattle-system rollout status deployment/rancher &>/dev/null; do sleep 3; done"; then
+        echo >&2 "Rancher Prime is not running yet"
+        exit 1
+      fi
+    hint: |
+      Rancher Prime is still starting up. Verify with: limactl shell rancher-prime kubectl get pods -A
