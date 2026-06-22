@@ -4,7 +4,7 @@ This guide describes how to run and verify a **Centralized Gateway** configurati
 
 ---
 
-## 🧠 What is a Centralized Gateway?
+## What is a Centralized Gateway?
 
 In an overlay network:
 1. **Distributed Gateway (Default):** Every host node acts as a gateway and forwards external-bound traffic (`natOutgoing: true`) independently using its own local network interface and routing table.
@@ -16,7 +16,7 @@ In an overlay network:
 
 ---
 
-## 📂 Test Manifests Layout
+## Test Manifests Layout
 
 The centralized gateway test artifacts are located under:
 ```
@@ -29,7 +29,7 @@ manifests/centralized-gateway-test/
 
 ---
 
-## 🚀 Execution & Verification Steps
+## Execution & Verification Steps
 
 ### 1. Access the VM Shell
 ```bash
@@ -61,7 +61,7 @@ You can verify the egress routing using either Option A (applying directly on th
 
 ---
 
-#### 📌 Option A: Host-Level Verification
+#### Option A: Host-Level Verification
 Deploy the alpine verification container directly under the guest's host namespace:
 
 ```bash
@@ -83,7 +83,7 @@ kubectl delete pod test-pod-centralized -n k3k-kube-ovn-centralized-cluster
 
 ---
 
-#### 📌 Option B: Virtual Cluster Guest-Level Verification (Explicit)
+#### Option B: Virtual Cluster Guest-Level Verification (Explicit)
 Deploy the test pod directly **inside** the k3k virtual cluster, testing the translation and CNI mapping from the guest perspective.
 
 ```bash
@@ -112,7 +112,7 @@ rm -f /tmp/kubeconfig-centralized.yaml
 
 ---
 
-## 🧹 Cleanup Test Infrastructure
+## Cleanup Test Infrastructure
 After completing the verification, clean up the centralized gateway test suite:
 ```bash
 kubectl delete -f manifests/centralized-gateway-test/cluster.yaml
