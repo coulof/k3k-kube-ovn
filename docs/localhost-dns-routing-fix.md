@@ -23,10 +23,33 @@ However, inside Kubernetes pods (like the `cattle-cluster-agent` in the `cattle-
 To resolve this "for good" in a completely standalone and automated way, we deploy a lightweight **Rancher Agent Resolver Controller** inside the `kube-system` namespace.
 
 ```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'fontFamily': 'SUSE, sans-serif',
+    'fontSize': '14px',
+    'primaryColor': '#30ba78',
+    'primaryTextColor': '#0c322c',
+    'primaryBorderColor': '#30ba78',
+    'lineColor': '#0c322c',
+    'secondaryColor': '#0c322c',
+    'tertiaryColor': '#90ebcd',
+    'mainBkg': '#ffffff',
+    'nodeBorder': '#0c322c',
+    'clusterBkg': '#efefef',
+    'clusterBorder': '#90ebcd',
+    'titleColor': '#0c322c',
+    'edgeLabelBackground':'#ffffff'
+  }
+} }%%
 graph TD
-    Pod[cattle-cluster-agent Pod] -->|HTTPS to localhost:8443| Proxy[Loopback Proxy Sidecar]
-    Proxy -->|TCP Tunnel over Guest Network| RM[Rancher Prime VM IP:443]
-    Ctrl[rancher-agent-resolver Controller] -.->|Watches & Patches| Pod
+    Pod[cattle-cluster-agent Pod]:::mint -->|HTTPS to localhost:8443| Proxy[Loopback Proxy Sidecar]:::pine
+    Proxy -->|TCP Tunnel over Guest Network| RM[Rancher Prime VM IP:443]:::jungle
+    Ctrl[rancher-agent-resolver Controller]:::pine -.->|Watches & Patches| Pod
+
+    classDef pine fill:#0c322c,stroke:#0c322c,color:#ffffff,stroke-width:2px;
+    classDef jungle fill:#30ba78,stroke:#30ba78,color:#0c322c,stroke-width:2px;
+    classDef mint fill:#90ebcd,stroke:#0c322c,color:#0c322c,stroke-width:1px;
 ```
 
 ### 1. The Loopback-Proxy Sidecar

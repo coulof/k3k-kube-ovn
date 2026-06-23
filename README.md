@@ -36,6 +36,25 @@ This repository sets up **Kube-OVN** as the primary Container Network Interface 
 Deploying CNIs and platform components on an empty cluster requires resolving a fundamental chicken-and-egg scheduling deadlock:
 
 ```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'fontFamily': 'SUSE, sans-serif',
+    'fontSize': '14px',
+    'primaryColor': '#30ba78',
+    'primaryTextColor': '#0c322c',
+    'primaryBorderColor': '#30ba78',
+    'lineColor': '#0c322c',
+    'secondaryColor': '#0c322c',
+    'tertiaryColor': '#90ebcd',
+    'mainBkg': '#ffffff',
+    'nodeBorder': '#0c322c',
+    'clusterBkg': '#efefef',
+    'clusterBorder': '#90ebcd',
+    'titleColor': '#0c322c',
+    'edgeLabelBackground':'#ffffff'
+  }
+} }%%
 sequenceDiagram
     autonumber
     participant Guest as VM Guest (Host OS)

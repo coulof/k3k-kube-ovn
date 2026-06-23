@@ -20,13 +20,32 @@ To leverage Kube-OVN's custom `Vpc` routing without breaking the virtual control
 The diagram below illustrates the multi-VPC isolation, the OVN-level peering tunnel, and the host-enforced NetworkPolicy filtering:
 
 ```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'fontFamily': 'SUSE, sans-serif',
+    'fontSize': '14px',
+    'primaryColor': '#30ba78',
+    'primaryTextColor': '#0c322c',
+    'primaryBorderColor': '#30ba78',
+    'lineColor': '#0c322c',
+    'secondaryColor': '#0c322c',
+    'tertiaryColor': '#90ebcd',
+    'mainBkg': '#ffffff',
+    'nodeBorder': '#0c322c',
+    'clusterBkg': '#efefef',
+    'clusterBorder': '#90ebcd',
+    'titleColor': '#0c322c',
+    'edgeLabelBackground':'#ffffff'
+  }
+} }%%
 graph TD
     %% Styling
-    classDef default fill:#1e1e2e,stroke:#cdd6f4,stroke-width:1px,color:#cdd6f4;
-    classDef host fill:#313244,stroke:#a6adc8,stroke-width:1px,color:#cdd6f4;
-    classDef vpcA fill:#11111b,stroke:#89b4fa,stroke-width:2px,color:#89b4fa;
-    classDef vpcB fill:#11111b,stroke:#a6e3a1,stroke-width:2px,color:#a6e3a1;
-    classDef highlight stroke:#f38ba8,stroke-width:2px;
+    classDef default fill:#ffffff,stroke:#0c322c,stroke-width:1px,color:#0c322c;
+    classDef host fill:#efefef,stroke:#0c322c,stroke-width:1px,color:#0c322c;
+    classDef vpcA fill:#90ebcd,stroke:#0c322c,stroke-width:2px,color:#0c322c;
+    classDef vpcB fill:#30ba78,stroke:#0c322c,stroke-width:2px,color:#0c322c;
+    classDef highlight stroke:#fe7c3f,stroke-width:2px;
 
     subgraph Host RKE2 Cluster [Host RKE2 Cluster - Default VPC: ovn-cluster]
         api["Host API Server<br/>10.43.0.1"]:::host
@@ -59,12 +78,34 @@ graph TD
     ctrl-b --> api
     kl-a --> api
     kl-b --> api
+
+    linkStyle 0 stroke:#0c322c,stroke-width:2px;
+    linkStyle 1 stroke:#fe7c3f,stroke-width:2px,stroke-dasharray: 5 5;
 ```
 
 ### 2. Multi-Phase Experimental Sequence
 The lifecycle of the experiment progresses through three distinct phases:
 
 ```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'fontFamily': 'SUSE, sans-serif',
+    'fontSize': '14px',
+    'primaryColor': '#30ba78',
+    'primaryTextColor': '#0c322c',
+    'primaryBorderColor': '#30ba78',
+    'lineColor': '#0c322c',
+    'secondaryColor': '#0c322c',
+    'tertiaryColor': '#90ebcd',
+    'mainBkg': '#ffffff',
+    'nodeBorder': '#0c322c',
+    'clusterBkg': '#efefef',
+    'clusterBorder': '#90ebcd',
+    'titleColor': '#0c322c',
+    'edgeLabelBackground':'#ffffff'
+  }
+} }%%
 sequenceDiagram
     autonumber
     participant Step1 as Phase 1: Custom VPC Isolation
