@@ -34,6 +34,8 @@ By creating a custom `Subnet` CRD on the host cluster targeting the `k3k-kube-ov
 ## Repository Structure
 
 ```
+docs/
+  localhost-dns-routing-fix.md -- Guide for resolving .localhost agent connection issues
 lima/
   k3k-kube-ovn.yaml         -- Lima template with read-only mounts & dynamic manifest sync
 manifests/
@@ -45,7 +47,7 @@ manifests/
     subnet.yaml             -- Host-level Kube-OVN subnet mapped to the guest namespace (private: false)
     kube-ovn-helmchart.yaml -- Guest-level HelmChart CRD (optional, for tenant control plane)
   rancher/
-    rancher-helmchart.yaml  -- HelmChart CRD to auto-deploy Rancher Prime on host RKE2 (dynamic hostname)
+    rancher-agent-resolver.yaml -- Self-healing controller manifest to resolve .localhost for agents
 ```
 
 ## Network Layout

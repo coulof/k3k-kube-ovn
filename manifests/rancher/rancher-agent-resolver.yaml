@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rancher-agent-resolver
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rancher-agent-resolver
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rancher-agent-resolver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rancher-agent-resolver
+subjects:
+  - kind: ServiceAccount
+    name: rancher-agent-resolver
+    namespace: kube-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rancher-agent-resolver
+  namespace: kube-system
+  labels:
+    app: rancher-agent-resolver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rancher-agent-resolver
+  template:
+    metadata:
+      labels:
+        app: rancher-agent-resolver
+    spec:
+      serviceAccountName: rancher-agent-resolver
+      containers:
+        - name: resolver
+          image: bitnami/kubectl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              echo "Starting Rancher Agent Resolver Controller..."
+              while true; do
+                # 1. Resolve Rancher VM IP via DNS
+                IP=""
+                if getent hosts lima-rancher-prime.internal >/dev/null; then
+                  IP=$(getent hosts lima-rancher-prime.internal | awk '{print $1}')
+                elif nslookup lima-rancher-prime.internal >/dev/null; then
+                  IP=$(nslookup lima-rancher-prime.internal | awk '/Address:[[:space:]]+[0-9]/ {print $2}' | head -n1)
+                fi
+
+                if [ -z "$IP" ]; then
+                  echo "Warning: Unable to resolve lima-rancher-prime.internal. Retrying in 10s..."
+                  sleep 10
+                  continue
+                fi
+
+                # 2. Scan and patch cattle-cluster-agent deployments across all namespaces
+                DEPLYS=$(kubectl get deployments -A -o jsonpath='{range .items[?(@.metadata.name=="cattle-cluster-agent")]}{.metadata.namespace}{"/"}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+
+                for DEP in $DEPLYS; do
+                  [ -z "$DEP" ] && continue
+                  NS=$(echo "$DEP" | cut -d'/' -f1)
+                  NAME=$(echo "$DEP" | cut -d'/' -f2)
+
+                  # Retrieve existing containers to check if loopback proxy is present and correct
+                  CURRENT_CONTAINERS=$(kubectl get deployment -n "$NS" "$NAME" -o jsonpath='{.spec.template.spec.containers}' 2>/dev/null || true)
+                  
+                  # Patch if loopback-proxy is missing, has outdated IP, or is on the conflicting port 443
+                  if echo "$CURRENT_CONTAINERS" | grep -q "rancher-agent-loopback-proxy" && echo "$CURRENT_CONTAINERS" | grep -q "$IP" && echo "$CURRENT_CONTAINERS" | grep -q "8443"; then
+                    continue
+                  fi
+
+                  echo "Patching deployment $NS/$NAME: Injecting loopback-proxy sidecar on port 8443 forwarding to $IP:443 and updating CATTLE_SERVER URL"
+                  
+                  # Idempotent strategic merge patch to:
+                  # 1. Shift CATTLE_SERVER inside cluster-register container to connect on loopback port 8443 (avoiding socket conflicts on port 443)
+                  # 2. Create/update the rancher-agent-loopback-proxy sidecar listening on 127.0.0.1:8443 and tunneling to Rancher VM IP:443
+                  kubectl patch deployment -n "$NS" "$NAME" -p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"cluster-register\",\"env\":[{\"name\":\"CATTLE_SERVER\",\"value\":\"https://lima-rancher-prime.localhost:8443\"}]},{\"name\":\"rancher-agent-loopback-proxy\",\"image\":\"alpine/socat:latest\",\"command\":[\"socat\",\"TCP-LISTEN:8443,fork,bind=127.0.0.1\",\"TCP:$IP:443\"]}]}}}}" || echo "Failed to patch deployment $NS/$NAME"
+                done
+
+                sleep 15
+              done

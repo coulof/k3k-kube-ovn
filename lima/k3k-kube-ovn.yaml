@@ -105,6 +105,14 @@ provision:
         curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
       fi
 
+      # 3. Install k3kcli
+      if ! command -v k3kcli &>/dev/null; then
+        echo "Installing k3kcli..."
+        wget -qO k3kcli https://github.com/rancher/k3k/releases/download/v1.1.0/k3kcli-linux-amd64
+        chmod +x k3kcli
+        mv k3kcli /usr/local/bin/
+      fi
+
       # 3. Wait for at least one host node to register in the API server
       echo "Waiting for at least one RKE2 host node to register..."
       until [ -n "$(kubectl get nodes -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)" ]; do
@@ -190,6 +198,12 @@ provision:
       if [ -f "${MANIFESTS_DIR}/k3k/cluster.yaml" ]; then
         echo "Copying cluster manifest from mount..."
         cp "${MANIFESTS_DIR}/k3k/cluster.yaml" /var/lib/rancher/rke2/server/manifests/k3k-cluster.yaml
+      fi
+
+      # 5. Copy the rancher-agent-resolver manifest
+      if [ -f "${MANIFESTS_DIR}/rancher/rancher-agent-resolver.yaml" ]; then
+        echo "Copying rancher-agent-resolver manifest from mount..."
+        cp "${MANIFESTS_DIR}/rancher/rancher-agent-resolver.yaml" /var/lib/rancher/rke2/server/manifests/rancher-agent-resolver.yaml
       fi
 
 

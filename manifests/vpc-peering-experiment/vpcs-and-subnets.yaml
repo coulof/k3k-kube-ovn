@@ -1,0 +1,47 @@
+apiVersion: kubeovn.io/v1
+kind: Vpc
+metadata:
+  name: vpc-tenant-a
+spec: {}
+---
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: subnet-tenant-a
+spec:
+  cidrBlock: 10.10.0.0/16
+  default: false
+  enableLb: true
+  excludeIps:
+  - 10.10.0.1
+  gateway: 10.10.0.1
+  gatewayType: distributed
+  natOutgoing: true
+  private: false
+  protocol: IPv4
+  provider: ovn
+  vpc: vpc-tenant-a
+---
+apiVersion: kubeovn.io/v1
+kind: Vpc
+metadata:
+  name: vpc-tenant-b
+spec: {}
+---
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: subnet-tenant-b
+spec:
+  cidrBlock: 10.20.0.0/16
+  default: false
+  enableLb: true
+  excludeIps:
+  - 10.20.0.1
+  gateway: 10.20.0.1
+  gatewayType: distributed
+  natOutgoing: true
+  private: false
+  protocol: IPv4
+  provider: ovn
+  vpc: vpc-tenant-b

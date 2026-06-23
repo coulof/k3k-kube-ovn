@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: k3k-tenant-a
+---
+apiVersion: k3k.io/v1beta1
+kind: Cluster
+metadata:
+  name: tenant-a
+  namespace: k3k-tenant-a
+spec:
+  mode: shared
+  servers: 1
+  agents: 0
+  clusterCIDR: "10.10.0.0/16"
+  serviceCIDR: "10.110.0.0/16"
+  clusterDNS: "10.110.0.10"
+  persistence:
+    type: none
+  serverArgs:
+    - "--flannel-backend=none"
+    - "--disable-network-policy"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: k3k-tenant-b
+---
+apiVersion: k3k.io/v1beta1
+kind: Cluster
+metadata:
+  name: tenant-b
+  namespace: k3k-tenant-b
+spec:
+  mode: shared
+  servers: 1
+  agents: 0
+  clusterCIDR: "10.20.0.0/16"
+  serviceCIDR: "10.120.0.0/16"
+  clusterDNS: "10.120.0.10"
+  persistence:
+    type: none
+  serverArgs:
+    - "--flannel-backend=none"
+    - "--disable-network-policy"
