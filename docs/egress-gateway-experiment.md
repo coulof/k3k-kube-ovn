@@ -177,11 +177,11 @@ graph TD
 
 All experiment-related resources are located in `manifests/egress-gateway-experiment/`:
 
-1.  **[vpcs-and-subnets.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/vpcs-and-subnets.yaml):** Mapped infrastructure VPCs, subnets, physical VLAN mapping, and `VpcEgressGateway` resources.
-2.  **[workloads-tenant-a.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/workloads-tenant-a.yaml) & [workloads-tenant-b.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/workloads-tenant-b.yaml):** Alpine client workload deployments with mapped Kube-OVN subnet annotations[^3][^4].
-3.  **[traffic-loop.sh](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/traffic-loop.sh):** Curl loop executed inside workload pods to continuously push traffic to the external log server.
-4.  **[egress-logger.py](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/egress-logger.py):** Python log analyzer bound to port `8888` on the test target VM to verify translated Source IPs.
-5.  **[showcase-demo.sh](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/showcase-demo.sh):** macOS-native dashboard control script using TMUX.
+1.  **[vpcs-and-subnets.yaml](manifests/egress-gateway-experiment/vpcs-and-subnets.yaml):** Mapped infrastructure VPCs, subnets, physical VLAN mapping, and `VpcEgressGateway` resources.
+2.  **[workloads-tenant-a.yaml](manifests/egress-gateway-experiment/workloads-tenant-a.yaml) & [workloads-tenant-b.yaml](manifests/egress-gateway-experiment/workloads-tenant-b.yaml):** Alpine client workload deployments with mapped Kube-OVN subnet annotations[^3][^4].
+3.  **[traffic-loop.sh](manifests/egress-gateway-experiment/traffic-loop.sh):** Curl loop executed inside workload pods to continuously push traffic to the external log server.
+4.  **[egress-logger.py](manifests/egress-gateway-experiment/egress-logger.py):** Python log analyzer bound to port `8888` on the test target VM to verify translated Source IPs.
+5.  **[showcase-demo.sh](manifests/egress-gateway-experiment/showcase-demo.sh):** macOS-native dashboard control script using TMUX.
 
 ---
 
@@ -242,7 +242,7 @@ Once started, TMUX will establish three active panes:
 During our experimentation, we analyzed the security boundary of k3k multi-tenancy in shared-mode and uncovered a structural limitation regarding logical switch binding annotations:
 
 *   **The Annotation Breakthrough Vulnerability:** A workload inside guest namespace `tenant-a` can bypass its assigned routing boundaries and hijack `subnet-tenant-b`'s network space by specifying the annotation `ovn.kubernetes.io/logical_switch: subnet-tenant-b` in its pod specification[^5]. This allows the guest pod to obtain a Tenant B IP (`10.20.0.0/16`) and ping workloads inside Tenant B natively.
-*   **The Root Cause (Co-location):** Under `k3k` shared-mode, all guest namespaces are mapped directly onto the host and co-located inside a single host-level namespace: `k3k-kube-ovn-cluster` (configured in [cluster.yaml#L5](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/k3k/cluster.yaml#L5))[^6].
+*   **The Root Cause (Co-location):** Under `k3k` shared-mode, all guest namespaces are mapped directly onto the host and co-located inside a single host-level namespace: `k3k-kube-ovn-cluster` (configured in [cluster.yaml#L5](manifests/k3k/cluster.yaml#L5))[^6].
 *   **Kube-OVN Validation Gap:** Kube-OVN's native subnet namespace restriction (`spec.namespaces` in the `Subnet` CRD) operates strictly on **host-level namespaces**. Because all virtual pods are scheduled within the single namespace `k3k-kube-ovn-cluster` at the host level, Kube-OVN can only restrict the subnet to `k3k-kube-ovn-cluster`. It cannot distinguish between guest virtual tenants, rendering native subnet filtering ineffective for virtual cluster isolation.
 *   **k3k Open Sync & RBAC Limits:** The `k3k-kubelet` controller blindly copies annotations from the virtual pod spec to the host pod spec without sanitization. In addition, standard Kubernetes RBAC has no native mechanism to filter or restrict specific annotations on Pod resources.
 *   **Conclusion:** Without custom validating admission webhooks (like OPA/Gatekeeper or Kyverno) to intercept and validate pod annotations on the api-server, **strict L3 multi-tenant isolation is natively unenforceable in k3k shared-mode.** To achieve secure isolation using only 100% native out-of-the-box configurations, you must either transition to **non-shared virtual clusters** (isolated node VM boundaries) or deploy workloads directly in separate **host-level namespaces** without k3k.
@@ -251,9 +251,9 @@ During our experimentation, we analyzed the security boundary of k3k multi-tenan
 
 ## 📚 Sources & References
 
-[^1]: Kube-OVN ProviderNetwork Underlay Configuration: [vpcs-and-subnets.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/vpcs-and-subnets.yaml#L60-L67)
-[^2]: Native Kube-OVN Flat VLAN Mapping Specification: [vpcs-and-subnets.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/vpcs-and-subnets.yaml#L84-L93)
-[^3]: Tenant A workloads pod definition: [workloads-tenant-a.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/workloads-tenant-a.yaml)
-[^4]: Tenant B workloads pod definition: [workloads-tenant-b.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/workloads-tenant-b.yaml)
-[^5]: Breakthrough pod configuration showing subnet hijacking: [breakthrough-pod.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/breakthrough-pod.yaml)
-[^6]: Host-level shared-mode k3k virtual Cluster configuration: [cluster.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/k3k/cluster.yaml)
+[^1]: Kube-OVN ProviderNetwork Underlay Configuration: [vpcs-and-subnets.yaml](manifests/egress-gateway-experiment/vpcs-and-subnets.yaml#L60-L67)
+[^2]: Native Kube-OVN Flat VLAN Mapping Specification: [vpcs-and-subnets.yaml](manifests/egress-gateway-experiment/vpcs-and-subnets.yaml#L84-L93)
+[^3]: Tenant A workloads pod definition: [workloads-tenant-a.yaml](manifests/egress-gateway-experiment/workloads-tenant-a.yaml)
+[^4]: Tenant B workloads pod definition: [workloads-tenant-b.yaml](manifests/egress-gateway-experiment/workloads-tenant-b.yaml)
+[^5]: Breakthrough pod configuration showing subnet hijacking: [breakthrough-pod.yaml](manifests/egress-gateway-experiment/breakthrough-pod.yaml)
+[^6]: Host-level shared-mode k3k virtual Cluster configuration: [cluster.yaml](manifests/k3k/cluster.yaml)
