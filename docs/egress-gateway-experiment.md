@@ -68,12 +68,12 @@ graph TD
         eth1_1 --- pn
     end
 
-    %% MIDDLE LAYER: Dotted L2 Virtual Networks
-    subgraph NetMgt [Net: user-v2 <br/> Management Network <br/> 192.168.104.0/24]
-    end
-    subgraph NetNode [Net: user-v2-node <br/> Core Node Network <br/> 192.168.106.0/24]
-    end
-    subgraph NetEgress [Net: user-v2-egress <br/> External L2 Underlay <br/> 192.168.105.0/24]
+    %% MIDDLE LAYER: Dotted L2 Virtual Networks (Aligned Horizontally)
+    subgraph L2Networks [Lima Virtual L2 Networks / Switches]
+        direction LR
+        NetMgt["Net: user-v2 <br/> Management Network <br/> 192.168.104.0/24"]
+        NetNode["Net: user-v2-node <br/> Core Node Network <br/> 192.168.106.0/24"]
+        NetEgress["Net: user-v2-egress <br/> External L2 Underlay <br/> 192.168.105.0/24"]
     end
 
     %% BOTTOM LAYER: VM egress-test-target
