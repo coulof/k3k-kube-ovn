@@ -60,11 +60,11 @@ graph TD
     %% Outgoing traffic paths
     podA1 -- "VPC A" --> gwA
     podA2 -- "VPC A" --> gwA
-    gwA -- "Source NAT over OVS Patch Ports" --> |Src: 192.168.105.70| srv
+    gwA --> |"Source NAT (Src: 192.168.105.70)"| srv
 
     podB1 -- "VPC B" --> gwB
     podB2 -- "VPC B" --> gwB
-    gwB -- "Source NAT over OVS Patch Ports" --> |Src: 192.168.105.80| srv
+    gwB --> |"Source NAT (Src: 192.168.105.80)"| srv
 ```
 
 ---
@@ -166,12 +166,12 @@ Hello from Egress Test VM! Recorded Src IP: 192.168.105.80
 
 ## 📚 Sources & References
 
-- [1] Kube-OVN ProviderNetwork Underlay Configuration: `manifests/egress-gateway-experiment/vpcs-and-subnets.yaml#L60-L67`
-- [2] Native Kube-OVN Flat VLAN Mapping Specification: `manifests/egress-gateway-experiment/vpcs-and-subnets.yaml#L84-L93`
+- [1] Kube-OVN ProviderNetwork Underlay Configuration: [vpcs-and-subnets.yaml#L60-L67](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/vpcs-and-subnets.yaml#L60-L67)
+- [2] Native Kube-OVN Flat VLAN Mapping Specification: [vpcs-and-subnets.yaml#L84-L93](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/vpcs-and-subnets.yaml#L84-L93)
 - [3] OVS Bridge Mapping and OVN Logical Switch Port bindings: `ovn-nbctl show` and `ovn-sbctl show` executed inside the cluster.
 - [4] Host-Level routing override of `ovn0`: `k3k-kube-ovn` VM routing table diagnostics.
 - [5] Host `/32` route addition for test target: `limactl shell k3k-kube-ovn ip route` diagnostics.
-- [6] Tenant A workloads pod definition and namespace binding: `manifests/egress-gateway-experiment/workloads-tenant-a.yaml` and `tenant-a.yaml`.
-- [7] Tenant B workloads pod definition and namespace binding: `manifests/egress-gateway-experiment/workloads-tenant-b.yaml` and `tenant-b.yaml`.
+- [6] Tenant A workloads pod definition and namespace binding: [workloads-tenant-a.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/workloads-tenant-a.yaml) and [tenant-a.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/tenant-a.yaml).
+- [7] Tenant B workloads pod definition and namespace binding: [workloads-tenant-b.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/egress-gateway-experiment/workloads-tenant-b.yaml) and [tenant-b.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/tenant-b.yaml).
 
 🦎 AIcko

@@ -63,11 +63,11 @@ graph TD
     %% Outgoing traffic paths
     podA1 -- "VPC A" --> gwA
     podA2 -- "VPC A" --> gwA
-    gwA -- "Source NAT over eth1" --> |Src: 192.168.105.70| srv
+    gwA --> |"Source NAT (Src: 192.168.105.70)"| srv
 
     podB1 -- "VPC B" --> gwB
     podB2 -- "VPC B" --> gwB
-    gwB -- "Source NAT over eth1" --> |Src: 192.168.105.80| srv
+    gwB --> |"Source NAT (Src: 192.168.105.80)"| srv
 ```
 
 ### Component-by-Component Mapping
