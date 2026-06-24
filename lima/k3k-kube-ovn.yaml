@@ -23,6 +23,8 @@ mounts:
 
 networks:
   - lima: user-v2
+  - lima: user-v2-egress
+  - lima: user-v2-node
 
 # Forward Kubernetes API (optional, for direct kubectl access from Mac)
 portForwards:
@@ -54,21 +56,21 @@ provision:
       sysctl -w net.ipv4.ip_forward=1
       echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/90-rke2-ip-forward.conf
 
-      # Create stable dummy loopback interface for consistent Node IP
-      if ! ip link show dummy0 &>/dev/null; then
-        echo "Creating dummy0 interface..."
-        ip link add dev dummy0 type dummy
-        ip addr add 192.168.250.12/32 dev dummy0
-        ip link set dev dummy0 up
+      # Bind secondary stable IP 192.168.106.2 to the interface in the 192.168.106.0/24 subnet (user-v2-node)
+      NODE_IFACE=$(ip route | grep 192.168.106.0/24 | awk '{print $3}' || true)
+      if [ -n "${NODE_IFACE}" ]; then
+        echo "Binding stable IP 192.168.106.2/24 to ${NODE_IFACE}..."
+        ip addr add 192.168.106.2/24 dev "${NODE_IFACE}" || true
       fi
 
       # Pre-configure RKE2 to set CNI to none (we will install Kube-OVN via Helm) and disable default ingress-nginx
+      # We bind RKE2 to the dedicated stable node-ip of eth2 (192.168.106.2) on the user-v2-node network.
       mkdir -p /etc/rancher/rke2
       cat <<EOF > /etc/rancher/rke2/config.yaml
       cni: none
-      node-ip: 192.168.250.12
+      node-ip: 192.168.106.2
       tls-san:
-        - 192.168.250.12
+        - 192.168.106.2
         - k3k-kube-ovn.internal
       disable:
         - rke2-ingress-nginx
@@ -184,6 +186,12 @@ provision:
       # 7. Now wait for nodes to transition to Ready (since CNI is active)
       echo "Waiting for nodes to be Ready..."
       kubectl wait --for=condition=Ready node --all --timeout=300s
+
+      # 8. Install Multus CNI to support multi-NIC egress gateways
+      echo "Installing Multus CNI..."
+      kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset.yml
+      echo "Waiting for Multus CNI to be ready..."
+      kubectl -n kube-system rollout status daemonset/kube-multus-ds --timeout=300s
 
 
       # Install cert-manager via RKE2 auto-deploy manifests

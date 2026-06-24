@@ -1,0 +1,145 @@
+# File: manifests/egress-gateway-experiment/vpcs-and-subnets.yaml
+# Purpose: Declarative native Kube-OVN Multi-VPC and VPC Egress Gateway configuration over lima1
+
+apiVersion: kubeovn.io/v1
+kind: Vpc
+metadata:
+  name: vpc-tenant-a
+spec:
+  enableExternal: true
+
+---
+apiVersion: kubeovn.io/v1
+kind: Vpc
+metadata:
+  name: vpc-tenant-b
+spec:
+  enableExternal: true
+
+---
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: subnet-tenant-a
+spec:
+  vpc: vpc-tenant-a
+  cidrBlock: 10.10.0.0/16
+  default: false
+  enableLb: true
+  excludeIps:
+  - 10.10.0.1
+  gateway: 10.10.0.1
+  gatewayType: distributed
+  gatewayNode: "lima-k3k-kube-ovn"
+  natOutgoing: false
+  private: false
+  protocol: IPv4
+  provider: ovn
+
+---
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: subnet-tenant-b
+spec:
+  vpc: vpc-tenant-b
+  cidrBlock: 10.20.0.0/16
+  default: false
+  enableLb: true
+  excludeIps:
+  - 10.20.0.1
+  gateway: 10.20.0.1
+  gatewayType: distributed
+  gatewayNode: "lima-k3k-kube-ovn"
+  natOutgoing: false
+  private: false
+  protocol: IPv4
+  provider: ovn
+
+---
+# 1. Map dedicated virtual gateway interface 'lima1' as Kube-OVN ProviderNetwork
+apiVersion: kubeovn.io/v1
+kind: ProviderNetwork
+metadata:
+  name: egress
+spec:
+  defaultInterface: lima1
+
+---
+# 2. Declare Multus NetworkAttachmentDefinition to link the underlay subnet to Multus CNI
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  name: egress
+  namespace: kube-system
+spec:
+  config: '{
+    "cniVersion": "0.3.1",
+    "type": "kube-ovn",
+    "server_socket": "/run/openvswitch/kube-ovn-daemon.sock",
+    "provider": "egress.kube-system.ovn"
+  }'
+
+---
+# 2.5 Declare Vlan CRD to map the underlay subnet to the ProviderNetwork natively
+apiVersion: kubeovn.io/v1
+kind: Vlan
+metadata:
+  name: egress-vlan
+spec:
+  vlanId: 0
+  provider: egress
+
+---
+# 3. Establish underlay external Subnet connected to our ProviderNetwork/NAD
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: external-egress-subnet
+spec:
+  protocol: IPv4
+  cidrBlock: 192.168.105.0/24
+  gateway: 192.168.105.1
+  vlan: egress-vlan
+  provider: egress.kube-system.ovn
+  natOutgoing: false
+  private: false
+  u2oInterconnection: false
+  vpc: ovn-cluster
+
+---
+# 4. Native VpcEgressGateway configurations for each tenant
+apiVersion: kubeovn.io/v1
+kind: VpcEgressGateway
+metadata:
+  name: gateway-tenant-a
+  namespace: default
+spec:
+  vpc: vpc-tenant-a
+  replicas: 1
+  externalSubnet: external-egress-subnet
+  internalSubnet: subnet-tenant-a
+  externalIPs:
+  - 192.168.105.70
+  policies:
+  - snat: true
+    subnets:
+    - subnet-tenant-a
+
+---
+apiVersion: kubeovn.io/v1
+kind: VpcEgressGateway
+metadata:
+  name: gateway-tenant-b
+  namespace: default
+spec:
+  vpc: vpc-tenant-b
+  replicas: 1
+  externalSubnet: external-egress-subnet
+  internalSubnet: subnet-tenant-b
+  externalIPs:
+  - 192.168.105.80
+  policies:
+  - snat: true
+    subnets:
+    - subnet-tenant-b
