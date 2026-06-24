@@ -1,0 +1,14 @@
+# File: manifests/egress-gateway-experiment/breakthrough-pod.yaml
+# Purpose: Demonstation workload to show VPC breakthrough from tenant-a using tenant-b's subnet annotation
+apiVersion: v1
+kind: Pod
+metadata:
+  name: breakthrough-pod-tenant-a
+  namespace: tenant-a
+  annotations:
+    ovn.kubernetes.io/logical_switch: subnet-tenant-b
+spec:
+  containers:
+  - name: client
+    image: alpine
+    command: ["sh", "-c", "sleep 36000"]

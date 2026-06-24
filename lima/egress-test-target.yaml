@@ -1,0 +1,110 @@
+# Lima VM template for egress testing target
+# Usage:
+#   limactl create --name egress-test-target lima/egress-test-target.yaml
+#   limactl start egress-test-target
+#
+
+images:
+  - location: https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.x86_64-Cloud.qcow2
+    arch: x86_64
+  - location: https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.aarch64-Cloud.qcow2
+    arch: aarch64
+
+cpus: 1
+memory: "1GiB"
+disk: "10GiB"
+
+networks:
+  - lima: user-v2
+  - lima: user-v2-egress
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+
+      # Disable firewalld
+      if systemctl is-enabled --quiet firewalld &>/dev/null || systemctl is-active --quiet firewalld &>/dev/null; then
+        systemctl disable --now firewalld || true
+      fi
+
+      # Configure static IP 192.168.105.100/24 on the interface in the 192.168.105.0/24 subnet
+      EGRESS_IFACE=""
+      for i in {1..10}; do
+        EGRESS_IFACE=$(ip route | grep 192.168.105.0/24 | awk '{print $3}' || true)
+        if [ -n "${EGRESS_IFACE}" ]; then break; fi
+        sleep 1
+      done
+
+      if [ -z "${EGRESS_IFACE}" ]; then
+        EGRESS_IFACE=$(ip link | grep -E 'eth1|lima1' | awk -F: '{print $2}' | tr -d ' ' | head -n 1 || true)
+      fi
+
+      if [ -n "${EGRESS_IFACE}" ]; then
+        echo "Binding static IP 192.168.105.100/24 to ${EGRESS_IFACE}..."
+        ip addr add 192.168.105.100/24 dev "${EGRESS_IFACE}" || true
+        ip link set "${EGRESS_IFACE}" up
+      fi
+
+      # Start Python Egress Logging HTTP Server
+      mkdir -p /opt/egress-logger
+      cat <<'EOF' > /opt/egress-logger/server.py
+      import http.server
+      import socketserver
+      import sys
+
+      class LoggerHandler(http.server.SimpleHTTPRequestHandler):
+          def do_GET(self):
+              client_ip = self.client_address[0]
+              
+              # Color-highlight known tenant egress IPs
+              if client_ip == "192.168.105.70":
+                  colored_ip = f"\033[1;32m{client_ip} (🟢 Tenant A Egress)\033[0m"
+              elif client_ip == "192.168.105.80":
+                  colored_ip = f"\033[1;36m{client_ip} (🔵 Tenant B Egress)\033[0m"
+              else:
+                  colored_ip = f"\033[1;33m{client_ip} (Other/Unknown)\033[0m"
+
+              from urllib.parse import urlparse, parse_qs
+              query = parse_qs(urlparse(self.path).query)
+              pod_name = query.get("pod", [""])[0]
+              pod_ip = query.get("ip", [""])[0]
+
+              pod_info = f" | Pod: \033[1;35m{pod_name}\033[0m (Local IP: \033[1;34m{pod_ip}\033[0m)" if (pod_name or pod_ip) else ""
+              print(f"[📥 CONNECTION] src: {colored_ip}{pod_info}", flush=True)
+
+              self.send_response(200)
+              self.send_header("Content-Type", "text/plain")
+              self.end_headers()
+              self.wfile.write(f"Hello from Egress Test VM! Recorded Src IP: {client_ip}\n".encode())
+
+          def log_message(self, format, *args):
+              pass # Suppress default noisy access logs
+
+      socketserver.TCPServer.allow_reuse_address = True
+      with socketserver.TCPServer(("0.0.0.0", 8888), LoggerHandler) as httpd:
+          print("=== EGRESS TARGET HTTP SERVER RUNNING ON PORT 8888 ===", flush=True)
+          sys.stdout.flush()
+          httpd.serve_forever()
+      EOF
+
+      # Create systemd service for the logger
+      cat <<'EOF' > /etc/systemd/system/egress-logger.service
+      [Unit]
+      Description=Egress Verification Target Server
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/python3 /opt/egress-logger/server.py
+      Restart=always
+      StandardOutput=journal+console
+      StandardError=journal+console
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+
+      systemctl daemon-reload
+      systemctl enable --now egress-logger.service

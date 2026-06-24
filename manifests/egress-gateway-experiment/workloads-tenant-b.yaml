@@ -1,0 +1,29 @@
+# File: manifests/egress-gateway-experiment/workloads-tenant-b.yaml
+# Purpose: Declarative workloads for Tenant B to verify egress IP aggregation
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client-pod-1
+  namespace: tenant-b
+  annotations:
+    ovn.kubernetes.io/logical_switch: subnet-tenant-b
+spec:
+  containers:
+  - name: client
+    image: alpine
+    command: ["sh", "-c", "sleep 36000"]
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client-pod-2
+  namespace: tenant-b
+  annotations:
+    ovn.kubernetes.io/logical_switch: subnet-tenant-b
+spec:
+  containers:
+  - name: client
+    image: alpine
+    command: ["sh", "-c", "sleep 36000"]
