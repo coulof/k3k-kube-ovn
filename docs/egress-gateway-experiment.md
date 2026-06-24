@@ -53,32 +53,32 @@ graph TD
     classDef vm fill:#ffffff,stroke:#30ba78,stroke-width:2px,color:#0c322c;
 
     subgraph macOS [macOS Host Machine]
-        subgraph NetMgt [Net: user-v2 <br/> Management Network <br/> 192.168.104.0/24]:::net
+        subgraph NetMgt [Net: user-v2 <br/> Management Network <br/> 192.168.104.0/24]
         end
-        subgraph NetEgress [Net: user-v2-egress <br/> External L2 Underlay <br/> 192.168.105.0/24]:::net
+        subgraph NetEgress [Net: user-v2-egress <br/> External L2 Underlay <br/> 192.168.105.0/24]
         end
-        subgraph NetNode [Net: user-v2-node <br/> Core Node Network <br/> 192.168.106.0/24]:::net
+        subgraph NetNode [Net: user-v2-node <br/> Core Node Network <br/> 192.168.106.0/24]
         end
 
-        subgraph VM1 [VM: k3k-kube-ovn <br/> Host Cluster Control Plane]:::vm
+        subgraph VM1 [VM: k3k-kube-ovn <br/> Host Cluster Control Plane]
             eth0_1["eth0 <br/> DHCP Management IP"]
             eth1_1["eth1 <br/> No Host IP <br/> Bound to OVS br-egress"]
             eth2_1["eth2 <br/> 192.168.106.2 <br/> Stable Node IP"]
             
             subgraph K8s [Kubernetes & Kube-OVN Provider Bridging]
-                pn["ProviderNetwork: egress<br/>(Binds to eth1 interface)"]:::default
-                vlan["Vlan: egress-vlan<br/>(Flat VLAN - ID: 0)"]:::default
-                sub_ext["Subnet: external-egress-subnet<br/>(CIDR: 192.168.105.0/24)"]:::default
+                pn["ProviderNetwork: egress<br/>(Binds to eth1 interface)"]
+                vlan["Vlan: egress-vlan<br/>(Flat VLAN - ID: 0)"]
+                sub_ext["Subnet: external-egress-subnet<br/>(CIDR: 192.168.105.0/24)"]
                 
                 pn --> vlan --> sub_ext
             end
         end
 
-        subgraph VM2 [VM: egress-test-target <br/> Egress Validation Server]:::vm
+        subgraph VM2 [VM: egress-test-target <br/> Egress Validation Server]
             eth0_2["eth0 <br/> DHCP Management IP"]
             eth1_2["eth1 <br/> Static IP: 192.168.105.100"]
             
-            srv["Egress Logger Server<br/>(Python HTTP on Port 8888)"]:::default
+            srv["Egress Logger Server<br/>(Python HTTP on Port 8888)"]
             eth1_2 --> srv
         end
     end
@@ -91,6 +91,12 @@ graph TD
     eth1_2 <--> NetEgress
 
     eth2_1 <--> NetNode
+
+    %% Apply class styles cleanly
+    class NetMgt,NetEgress,NetNode net;
+    class VM1,VM2 vm;
+    class pn,vlan,sub_ext,srv default;
+```,StartLine:50,TargetContent:
 ```
 
 ### 2. L3 Logical Data-Path Topology
