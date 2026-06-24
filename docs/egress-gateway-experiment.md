@@ -85,14 +85,14 @@ graph TD
         eth1_2 --> srv
     end
 
-    %% Vertical NIC to Network Interconnections
+    %% Vertical NIC to Network Interconnections (Chained Top-to-Bottom)
     eth0_1 <--> NetMgt
-    eth0_2 <--> NetMgt
+    NetMgt <--> eth0_2
 
     eth2_1 <--> NetNode
 
     eth1_1 <--> NetEgress
-    eth1_2 <--> NetEgress
+    NetEgress <--> eth1_2
 
     %% Apply class styles cleanly
     class NetMgt,NetEgress,NetNode net;
