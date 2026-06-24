@@ -1,6 +1,6 @@
-# 🌉 Kube-OVN VPC Peering & Host NetworkPolicy Demo
+# 🌉 Kube-OVN VPC Peering & Host Subnet ACL Demo
 
-This guide provides a comprehensive, step-by-step manual and architectural blueprint to demonstrate and reproduce **custom VPC isolation, high-performance VPC Peering, and host-level NetworkPolicy enforcement** using **k3k** virtual clusters in shared mode on RKE2.
+This guide provides a comprehensive, step-by-step manual and architectural blueprint to demonstrate and reproduce **custom VPC isolation, high-performance VPC Peering, and host-level Subnet ACL / NetworkPolicy enforcement** using **k3k** virtual clusters in shared mode on RKE2.
 
 ---
 
@@ -110,8 +110,8 @@ sequenceDiagram
     autonumber
     participant Step1 as Phase 1: Custom VPC Isolation
     participant Step2 as Phase 2: OVN Peering Bridge
-    participant Step3 as Phase 3: Host NetworkPolicy ACL
-
+    participant Step3 as Phase 3: Host Subnet ACL
+    
     Note over Step1: Deploy tenant-a (10.10.0.0/16)<br/>Deploy tenant-b (10.20.0.0/16)
     Step1->>Step1: client-pod (A) queries server-pod (B)
     Note over Step1: Result: TIMEOUT (No route between VPCs)
@@ -121,10 +121,10 @@ sequenceDiagram
     Step2->>Step2: client-pod (A) queries server-pod (B)
     Note over Step2: Result: SUCCESS (hello from tenant-b)
 
-    Note over Step3: Apply Host NetworkPolicy in k3k-tenant-b
-    Step3->>Step3: OVN compiles K8s NP into OVS Port ACLs
+    Note over Step3: Patch Subnet with High-Priority ACL (4000)
+    Step3->>Step3: OVN compiles Subnet ACL into Logical Switch ACLs
     Step3->>Step3: client-pod (A) queries server-pod (B)
-    Note over Step3: Result: TIMEOUT (Traffic dropped at interface)
+    Note over Step3: Result: TIMEOUT (Traffic dropped at logical switch egress)
 ```
 
 ---
@@ -324,10 +324,37 @@ spec:
 
 ---
 
-### 6. Host NetworkPolicy Configuration
-* **File Path:** `manifests/vpc-peering-experiment/networkpolicy.yaml`
-* **Purpose:** Restricts port 8080 traffic to allow only local `tenant-b` source pods, denying the peered `tenant-a` subnet.
+### 6. Host NetworkPolicy & Subnet ACL Configuration
+* **File Path (Standard Policy):** `manifests/vpc-peering-experiment/networkpolicy.yaml`
+* **Patch Target (Subnet ACL):** `subnet.kubeovn.io/subnet-tenant-b`
 
+#### ⚠️ The k3k Additive NetworkPolicy Override Limitation
+In `k3k` shared mode, the operator automatically provisions a namespace-level default `NetworkPolicy` named `k3k-tenant-b` inside the host namespace to coordinate guest pod ingress/egress. This default policy explicitly includes an empty ingress block (`ingress: - {}`), which functions as an **allow-all-ingress** rule.
+
+Because Kubernetes NetworkPolicies are **additive** (meaning multiple policies applied to a pod are evaluated as a logical `OR`), applying a custom restrictive policy like `secure-peered-server` on top of the default-allow policy is completely ineffective. Standard traffic remains allowed by the operator's namespace rule.
+
+#### 🛡️ The Solution: Kube-OVN High-Priority Subnet ACLs
+To secure and isolate peered transit connections across custom VPC boundaries, we configure native **Kube-OVN Subnet ACLs** directly on the custom `Subnet` resource. 
+
+By applying an ACL with `priority: 4000`, we inject our blocking rule ahead of the standard Kubernetes NetworkPolicy translation rules (which compile as OVN ACLs at priority `3001` or `2001`). This ensures our `drop` rule is processed and matched first in the OVN Logical Switch pipeline.
+
+**Subnet ACL Patch Definition:**
+```json
+{
+  "spec": {
+    "acls": [
+      {
+        "action": "drop",
+        "direction": "to-lport",
+        "match": "ip4.src == 10.10.0.0/16",
+        "priority": 4000
+      }
+    ]
+  }
+}
+```
+
+**Standard Reference Policy (`networkpolicy.yaml`):**
 ```yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -341,8 +368,6 @@ spec:
   policyTypes:
   - Ingress
   ingress:
-  # Allow ingress traffic only from within tenant-b's own workload CIDR.
-  # This automatically blocks the peered traffic from tenant-a (10.10.0.0/16).
   - from:
     - ipBlock:
         cidr: 10.20.0.0/16
@@ -448,10 +473,10 @@ kubectl --kubeconfig tenant-a.yaml exec client-pod -- wget -T 5 -O- http://10.20
 
 ---
 
-### Step 6: Secure Peered Link with NetworkPolicy (Phase 3)
-Apply the Kubernetes NetworkPolicy on the host cluster to filter the peered traffic:
+### Step 6: Secure Peered Link with Subnet ACL (Phase 3)
+Apply the high-priority Subnet ACL on the host cluster to drop the peered traffic:
 ```bash
-kubectl apply -f manifests/vpc-peering-experiment/networkpolicy.yaml
+kubectl patch subnet subnet-tenant-b --type='merge' -p '{"spec":{"acls":[{"action":"drop","direction":"to-lport","match":"ip4.src == 10.10.0.0/16","priority":4000}]}}'
 ```
 
 Test connectivity from the tenant-a client one final time:
@@ -464,7 +489,7 @@ kubectl --kubeconfig tenant-a.yaml exec client-pod -- wget -T 5 -O- http://10.20
   wget: download timed out
   command terminated with exit code 1
   ```
-* **Verification:** The NetworkPolicy successfully dropped the peered ingress traffic, leaving internal `tenant-b` pod communications secure.
+* **Verification:** The Subnet ACL successfully intercepted and dropped the peered ingress traffic before it reached the server pod, leaving internal communications secure.
 
 ---
 
@@ -474,7 +499,7 @@ To make it incredibly easy to present, observe, and interact with this multi-pha
 
 * **Top-Left (Pane 0):** A continuous, colorized traffic testing loop showing connectivity status from `client-pod` to `server-pod`.
 * **Bottom-Left (Pane 1):** Real-time monitoring of Kube-OVN VPC peering links and subnet definitions.
-* **Top-Right (Pane 2):** Real-time monitoring of host-level `NetworkPolicies` and matching server pod labels.
+* **Top-Right (Pane 2):** Real-time monitoring of host-level `Subnet ACLs` and active OVN Northbound DB rules.
 * **Bottom-Right (Pane 3):** An interactive **Control Console** where you can run simple helper commands (`peer`, `unpeer`, `secure`, `unsecure`, `status`, `menu`) to toggle each phase of the demo and see the results instantly propagate to the other panes!
 
 ### Launching the Dashboard
@@ -491,7 +516,7 @@ In the bottom-right terminal pane (active by default), use these simple commands
 
 1. **Phase 1 Baseline (Isolated):** If peerings are already active, run `unpeer`. The Top-Left traffic loop will instantly switch to a red **`[🔴 BLOCKED]`** status as OVS isolation takes effect.
 2. **Phase 2 Peering (Connected):** Run `peer`. The Top-Left traffic loop will instantly switch to a green **`[🟢 SUCCESS]`** status showing `"hello from tenant-b"`.
-3. **Phase 3 Secure (NetworkPolicy Enforced):** Run `secure`. The Top-Left traffic loop will instantly switch to a red **`[🔴 BLOCKED]`** status as host-level ACLs drop the peering traffic, while the Top-Right pane shows the newly applied `secure-peered-server` policy!
+3. **Phase 3 Secure (Subnet ACL Enforced):** Run `secure`. The Top-Left traffic loop will instantly switch to a red **`[🔴 BLOCKED]`** status as host-level logical switch ACLs drop the peering traffic, while the Top-Right pane shows the newly applied Subnet ACL drop rule!
 4. **Restore Peering:** Run `unsecure`. The traffic loop will immediately recover to green **`[🟢 SUCCESS]`**.
 
 To exit the showcase, simply press `Ctrl+C` in any running loops/watches and type `exit` or detach from TMUX using `Ctrl+B` then `D`.
@@ -507,8 +532,8 @@ Run the following commands to safely tear down the experimental resources from t
 kubectl --kubeconfig tenant-a.yaml delete pod client-pod --wait=false 2>/dev/null || true
 kubectl --kubeconfig tenant-b.yaml delete pod server-pod --wait=false 2>/dev/null || true
 
-# 2. Delete NetworkPolicy
-kubectl delete -f manifests/vpc-peering-experiment/networkpolicy.yaml --wait=false 2>/dev/null || true
+# 2. Reset Subnet ACLs
+kubectl patch subnet subnet-tenant-b --type='merge' -p '{"spec":{"acls":null}}' 2>/dev/null || true
 
 # 3. Delete k3k virtual clusters and namespaces
 kubectl delete -f manifests/vpc-peering-experiment/k3k-clusters.yaml 2>/dev/null || true

@@ -38,10 +38,10 @@ tmux split-window -v -t "$SESSION:0.2"
 tmux send-keys -t "$SESSION:0.0" "bash manifests/vpc-peering-experiment/traffic-loop.sh" C-m
 
 # Pane 1 (Bottom-Left): Live watch of VPC and Subnet details
-tmux send-keys -t "$SESSION:0.1" "watch -n 1 -c \"echo -e '\\\033[1;34m=== KUBE-OVN VPC PEERING STATUS ===\\\033[0m' && kubectl get vpc vpc-tenant-a vpc-tenant-b -o custom-columns=NAME:.metadata.name,PEERINGS:.status.vpcPeerings && echo && echo -e '\\\033[1;34m=== WORKLOAD SUBNETS ===\\\033[0m' && kubectl get subnet subnet-tenant-a,subnet-tenant-b -o custom-columns=NAME:.metadata.name,CIDR:.spec.cidrBlock,VPC:.spec.vpc\"" C-m
+tmux send-keys -t "$SESSION:0.1" "watch -n 1 -c \"echo -e '\\\033[1;34m=== KUBE-OVN VPC PEERING STATUS ===\\\033[0m' && kubectl get vpc vpc-tenant-a vpc-tenant-b -o custom-columns=NAME:.metadata.name,PEERINGS:.status.vpcPeerings && echo && echo -e '\\\033[1;34m=== WORKLOAD SUBNETS ===\\\033[0m' && kubectl get subnet subnet-tenant-a subnet-tenant-b -o custom-columns=NAME:.metadata.name,CIDR:.spec.cidrBlock,VPC:.spec.vpc\"" C-m
 
-# Pane 2 (Top-Right): Live watch of host-level NetworkPolicies & Pod matching
-tmux send-keys -t "$SESSION:0.2" "watch -n 1 -c \"echo -e '\\\033[1;36m=== HOST NETWORK POLICIES IN k3k-tenant-b ===\\\033[0m' && kubectl get networkpolicy -n k3k-tenant-b && echo && echo -e '\\\033[1;36m=== MATCHED HOST PODS (SERVER) ===\\\033[0m' && kubectl get pods -n k3k-tenant-b -l app=server-app --show-labels\"" C-m
+# Pane 2 (Top-Right): Live watch of Subnet ACL rules & active OVN ACL list
+tmux send-keys -t "$SESSION:0.2" "watch -n 1 -c \"echo -e '\\\033[1;36m=== SUBNET ACL RULES FOR subnet-tenant-b ===\\\033[0m' && kubectl get subnet subnet-tenant-b -o custom-columns=NAME:.metadata.name,ACLS:.spec.acls && echo && echo -e '\\\033[1;36m=== ACTIVE OVN NB ACL LIST ===\\\033[0m' && kubectl exec -n kube-system deploy/ovn-central -- ovn-nbctl acl-list subnet-tenant-b\"" C-m
 
 # Pane 3 (Bottom-Right): Sourced interactive control menu
 tmux send-keys -t "$SESSION:0.3" "bash --rcfile <(echo 'source ~/.bashrc; [ -f manifests/vpc-peering-experiment/controller-helpers.sh ] && source manifests/vpc-peering-experiment/controller-helpers.sh')" C-m

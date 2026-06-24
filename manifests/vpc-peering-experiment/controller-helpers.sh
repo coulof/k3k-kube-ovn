@@ -29,26 +29,27 @@ function peer() {
 }
 
 function unpeer() {
-  echo -e "\033[1;31mDeleting VPC Peering configuration...\033[0m"
-  kubectl delete -f manifests/vpc-peering-experiment/peering.yaml --wait=false 2>/dev/null || true
+  echo -e "\033[1;31mRemoving VPC Peering and static routes from VPC specs...\033[0m"
+  kubectl patch vpc vpc-tenant-a -p '{"spec":{"vpcPeerings":null,"staticRoutes":null}}' --type=merge 2>/dev/null || true
+  kubectl patch vpc vpc-tenant-b -p '{"spec":{"vpcPeerings":null,"staticRoutes":null}}' --type=merge 2>/dev/null || true
 }
 
 function secure() {
-  echo -e "\033[1;35mApplying Host-Level NetworkPolicy inside namespace 'k3k-tenant-b'...\033[0m"
-  kubectl apply -f manifests/vpc-peering-experiment/networkpolicy.yaml
+  echo -e "\033[1;35mApplying high-priority Subnet ACL on 'subnet-tenant-b' to drop tenant-a traffic...\033[0m"
+  kubectl patch subnet subnet-tenant-b --type='merge' -p '{"spec":{"acls":[{"action":"drop","direction":"to-lport","match":"ip4.src == 10.10.0.0/16","priority":4000}]}}'
 }
 
 function unsecure() {
-  echo -e "\033[1;36mRemoving Host-Level NetworkPolicy from namespace 'k3k-tenant-b'...\033[0m"
-  kubectl delete -f manifests/vpc-peering-experiment/networkpolicy.yaml --wait=false 2>/dev/null || true
+  echo -e "\033[1;36mRemoving Subnet ACL from 'subnet-tenant-b' (Restoring full peering connectivity)...\033[0m"
+  kubectl patch subnet subnet-tenant-b --type='merge' -p '{"spec":{"acls":null}}'
 }
 
 function status() {
   echo -e "\033[1;34m=== VPC PEERING SPECS ===\033[0m"
   kubectl get vpc vpc-tenant-a vpc-tenant-b -o custom-columns=NAME:.metadata.name,PEERINGS:.status.vpcPeerings
   echo
-  echo -e "\033[1;34m=== ACTIVE NETWORKPOLICIES IN k3k-tenant-b ===\033[0m"
-  kubectl get networkpolicy -n k3k-tenant-b
+  echo -e "\033[1;34m=== ACTIVE SUBNET ACL RULES (subnet-tenant-b) ===\033[0m"
+  kubectl get subnet subnet-tenant-b -o custom-columns=NAME:.metadata.name,ACLS:.spec.acls
 }
 
 # Display the menu on startup

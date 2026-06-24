@@ -54,10 +54,22 @@ provision:
       sysctl -w net.ipv4.ip_forward=1
       echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/90-rke2-ip-forward.conf
 
+      # Create stable dummy loopback interface for consistent Node IP
+      if ! ip link show dummy0 &>/dev/null; then
+        echo "Creating dummy0 interface..."
+        ip link add dev dummy0 type dummy
+        ip addr add 192.168.250.12/32 dev dummy0
+        ip link set dev dummy0 up
+      fi
+
       # Pre-configure RKE2 to set CNI to none (we will install Kube-OVN via Helm) and disable default ingress-nginx
       mkdir -p /etc/rancher/rke2
       cat <<EOF > /etc/rancher/rke2/config.yaml
       cni: none
+      node-ip: 192.168.250.12
+      tls-san:
+        - 192.168.250.12
+        - k3k-kube-ovn.internal
       disable:
         - rke2-ingress-nginx
       EOF
@@ -108,9 +120,31 @@ provision:
       # 3. Install k3kcli
       if ! command -v k3kcli &>/dev/null; then
         echo "Installing k3kcli..."
-        wget -qO k3kcli https://github.com/rancher/k3k/releases/download/v1.1.0/k3kcli-linux-amd64
+        ARCH=$(uname -m)
+        case "${ARCH}" in
+          x86_64) K3K_ARCH="linux-amd64" ;;
+          aarch64) K3K_ARCH="linux-arm64" ;;
+          *) K3K_ARCH="linux-amd64" ;;
+        esac
+        wget -qO k3kcli "https://github.com/rancher/k3k/releases/download/v1.1.0/k3kcli-${K3K_ARCH}"
         chmod +x k3kcli
         mv k3kcli /usr/local/bin/
+      fi
+
+      # Install stern (Log tailing utility for Kubernetes)
+      if ! command -v stern &>/dev/null; then
+        echo "Installing stern..."
+        ARCH=$(uname -m)
+        case "${ARCH}" in
+          x86_64) STERN_ARCH="amd64" ;;
+          aarch64) STERN_ARCH="arm64" ;;
+          *) STERN_ARCH="arm64" ;;
+        esac
+        curl -fsSL "https://github.com/stern/stern/releases/download/v1.34.0/stern_1.34.0_linux_${STERN_ARCH}.tar.gz" -o stern.tar.gz
+        tar xf stern.tar.gz stern
+        chmod +x stern
+        mv stern /usr/local/bin/
+        rm -f stern.tar.gz
       fi
 
       # 3. Wait for at least one host node to register in the API server
@@ -221,10 +255,11 @@ provision:
         zypper --non-interactive install -y bash-completion
       fi
 
-      echo "Generating kubectl and helm system-wide bash completions..."
+      echo "Generating kubectl, helm and stern system-wide bash completions..."
       mkdir -p /usr/share/bash-completion/completions
       /var/lib/rancher/rke2/bin/kubectl completion bash > /usr/share/bash-completion/completions/kubectl
       /usr/local/bin/helm completion bash > /usr/share/bash-completion/completions/helm
+      /usr/local/bin/stern --completion bash > /usr/share/bash-completion/completions/stern
 
 
   - mode: system

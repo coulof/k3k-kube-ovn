@@ -12,6 +12,9 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -76,20 +79,26 @@ spec:
                   NS=$(echo "$DEP" | cut -d'/' -f1)
                   NAME=$(echo "$DEP" | cut -d'/' -f2)
 
-                  # Retrieve existing containers to check if loopback proxy is present and correct
-                  CURRENT_CONTAINERS=$(kubectl get deployment -n "$NS" "$NAME" -o jsonpath='{.spec.template.spec.containers}' 2>/dev/null || true)
-                  
-                  # Patch if loopback-proxy is missing, has outdated IP, or is on the conflicting port 443
-                  if echo "$CURRENT_CONTAINERS" | grep -q "rancher-agent-loopback-proxy" && echo "$CURRENT_CONTAINERS" | grep -q "$IP" && echo "$CURRENT_CONTAINERS" | grep -q "8443"; then
-                    continue
+                  # 2a. Retrieve and patch associated cattle-credentials secret to point to port 8443
+                  SECRET_NAME=$(kubectl get deployment -n "$NS" "$NAME" -o jsonpath='{.spec.template.spec.volumes[?(@.name=="cattle-credentials")].secret.secretName}' 2>/dev/null || true)
+                  if [ -n "$SECRET_NAME" ]; then
+                    CURRENT_URL=$(kubectl get secret -n "$NS" "$SECRET_NAME" -o jsonpath='{.data.url}' 2>/dev/null || true)
+                    if [ "$CURRENT_URL" != "aHR0cHM6Ly9saW1hLXJhbmNoZXItcHJpbWUubG9jYWxob3N0Ojg0NDM=" ]; then
+                      echo "Patching secret $NS/$SECRET_NAME: Redirecting connection URL to port 8443"
+                      kubectl patch secret -n "$NS" "$SECRET_NAME" -p '{"data":{"url":"aHR0cHM6Ly9saW1hLXJhbmNoZXItcHJpbWUubG9jYWxob3N0Ojg0NDM="}}' || echo "Failed to patch secret $NS/$SECRET_NAME"
+                    fi
                   fi
 
-                  echo "Patching deployment $NS/$NAME: Injecting loopback-proxy sidecar on port 8443 forwarding to $IP:443 and updating CATTLE_SERVER URL"
-                  
-                  # Idempotent strategic merge patch to:
-                  # 1. Shift CATTLE_SERVER inside cluster-register container to connect on loopback port 8443 (avoiding socket conflicts on port 443)
-                  # 2. Create/update the rancher-agent-loopback-proxy sidecar listening on 127.0.0.1:8443 and tunneling to Rancher VM IP:443
-                  kubectl patch deployment -n "$NS" "$NAME" -p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"cluster-register\",\"env\":[{\"name\":\"CATTLE_SERVER\",\"value\":\"https://lima-rancher-prime.localhost:8443\"}]},{\"name\":\"rancher-agent-loopback-proxy\",\"image\":\"alpine/socat:latest\",\"command\":[\"socat\",\"TCP-LISTEN:8443,fork,bind=127.0.0.1\",\"TCP:$IP:443\"]}]}}}}" || echo "Failed to patch deployment $NS/$NAME"
+                  # 2b. Patch deployment with loopback-proxy sidecar if missing or outdated
+                  CURRENT_CATTLE_SERVER=$(kubectl get deployment -n "$NS" "$NAME" -o jsonpath='{.spec.template.spec.containers[?(@.name=="cluster-register")].env[?(@.name=="CATTLE_SERVER")].value}' 2>/dev/null || true)
+                  CURRENT_CONTAINERS=$(kubectl get deployment -n "$NS" "$NAME" -o jsonpath='{.spec.template.spec.containers}' 2>/dev/null || true)
+                  if [ "$CURRENT_CATTLE_SERVER" != "https://lima-rancher-prime.localhost:8443" ] || \
+                     ! echo "$CURRENT_CONTAINERS" | grep -q "rancher-agent-loopback-proxy" || \
+                     ! echo "$CURRENT_CONTAINERS" | grep -q "$IP" || \
+                     ! echo "$CURRENT_CONTAINERS" | grep -q "8443"; then
+                    echo "Patching deployment $NS/$NAME: Injecting/updating loopback-proxy sidecar on port 8443 forwarding to $IP:443 and setting CATTLE_SERVER URL to port 8443"
+                    kubectl patch deployment -n "$NS" "$NAME" -p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"cluster-register\",\"env\":[{\"name\":\"CATTLE_SERVER\",\"value\":\"https://lima-rancher-prime.localhost:8443\"}]},{\"name\":\"rancher-agent-loopback-proxy\",\"image\":\"alpine/socat:latest\",\"command\":[\"socat\",\"TCP-LISTEN:8443,fork,bind=127.0.0.1\",\"TCP:$IP:443\"]}]}}}}" || echo "Failed to patch deployment $NS/$NAME"
+                  fi
                 done
 
                 sleep 15

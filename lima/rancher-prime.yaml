@@ -60,10 +60,18 @@ provision:
       sysctl -w net.ipv4.ip_forward=1
       echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/90-k3s-ip-forward.conf
 
+      # Create stable dummy loopback interface for consistent Node IP
+      if ! ip link show dummy0 &>/dev/null; then
+        echo "Creating dummy0 interface..."
+        ip link add dev dummy0 type dummy
+        ip addr add 192.168.250.11/32 dev dummy0
+        ip link set dev dummy0 up
+      fi
+
       # Install K3s (with default Traefik controller, write-kubeconfig-mode 644, and custom TLS SANs)
       if ! command -v k3s &>/dev/null; then
         echo "Installing K3s..."
-        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--write-kubeconfig-mode 644 --tls-san=lima-rancher-prime.localhost --tls-san=localhost" sh -
+        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--write-kubeconfig-mode 644 --node-ip=192.168.250.11 --tls-san=192.168.250.11 --tls-san=lima-rancher-prime.localhost --tls-san=localhost" sh -
       fi
 
       # Wait for K3s kubectl binary to be available

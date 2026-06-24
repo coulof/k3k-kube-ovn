@@ -60,12 +60,13 @@ To prevent this collision, we use a **dual-port redirection strategy**:
 * **Non-Conflicting Proxy:** A lightweight `alpine/socat` sidecar is injected into the pod. It listens on `127.0.0.1:8443` and transparently forwards all traffic to the Rancher Prime VM's dynamic IP address on port `443` [manifests/rancher/rancher-agent-resolver.yaml:L92](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/rancher/rancher-agent-resolver.yaml#L92).
 
 ### 2. The Auto-Patching Controller
-Because the downstream agent deployment spec is managed dynamically and can be overwritten on upgrades or re-registration, we use a lightweight self-healing controller manifest [manifests/rancher/rancher-agent-resolver.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/rancher/rancher-agent-resolver.yaml).
+Because the downstream agent deployment and credentials secrets are managed dynamically by Rancher and can be overwritten on upgrades or re-registration, we deploy a lightweight self-healing controller manifest [manifests/rancher/rancher-agent-resolver.yaml](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/rancher/rancher-agent-resolver.yaml).
 
 The controller script:
-1. Dynamically resolves the Rancher Prime VM's IP address on the shared `user-v2` network using Lima's standard `<VM_NAME>.internal` DNS name [manifests/rancher/rancher-agent-resolver.yaml:L57-L63](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/rancher/rancher-agent-resolver.yaml#L57-L63).
-2. Scans all namespaces for any deployment named `cattle-cluster-agent` [manifests/rancher/rancher-agent-resolver.yaml:L71-L77](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/rancher/rancher-agent-resolver.yaml#L71-L77).
-3. Automatically patches the deployment to update `CATTLE_SERVER` and injects the proxy sidecar [manifests/rancher/rancher-agent-resolver.yaml:L79-L93](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/rancher/rancher-agent-resolver.yaml#L79-L93).
+1. **Resolves the Rancher Prime VM's IP address** on the shared `user-v2` network using Lima's standard `<VM_NAME>.internal` DNS name [manifests/rancher/rancher-agent-resolver.yaml:L57-L63](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/rancher/rancher-agent-resolver.yaml#L57-L63).
+2. **Scans all namespaces** for any deployment named `cattle-cluster-agent` [manifests/rancher/rancher-agent-resolver.yaml:L74-L80](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/rancher/rancher-agent-resolver.yaml#L74-L80).
+3. **Patches the `cattle-credentials` secret**: Since the compiled Go-based Rancher agent binary bypasses the standard socket environment variables and parses the server URL directly from its mounted credentials secret (`/cattle-credentials/url`), the controller locates and updates the secret's base64 registration URL to use port `8443` (`https://lima-rancher-prime.localhost:8443`) [manifests/rancher/rancher-agent-resolver.yaml:L82-L91](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/rancher/rancher-agent-resolver.yaml#L82-L91).
+4. **Patches the Deployment**: It injects the `alpine/socat` sidecar listening on loopback port `8443` (tunneling to Rancher Prime's VM IP on `443`) and updates the `CATTLE_SERVER` environment variable [manifests/rancher/rancher-agent-resolver.yaml:L93-L98](file:///Users/florian.coulombel/src/coulof/k3k-kube-ovn/manifests/rancher/rancher-agent-resolver.yaml#L93-L98).
 
 ---
 
