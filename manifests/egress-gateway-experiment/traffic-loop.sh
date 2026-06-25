@@ -152,7 +152,7 @@ while true; do
   fi
 
   echo -e "\033[1;35m=====================================================================\033[0m"
-  echo "Next check in 7 seconds... (Press Ctrl+C to exit)"
-  sleep 7
+  echo "Next check in 5 seconds... (Press Ctrl+C to exit)"
+  sleep 5
   clear
 done

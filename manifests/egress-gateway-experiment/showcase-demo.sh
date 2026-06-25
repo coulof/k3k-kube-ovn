@@ -12,13 +12,18 @@ if ! command -v tmux &> /dev/null; then
   exit 1
 fi
 
-# Make sure k3k-kube-ovn is running
-VM_STATUS=$(limactl list k3k-kube-ovn --format '{{.Status}}' 2>/dev/null)
-if [ "$VM_STATUS" != "Running" ]; then
-  echo -e "\033[1;31mError: Guest VM 'k3k-kube-ovn' is not running.\033[0m"
-  echo -e "Please start it: \033[1;32mlimactl start k3k-kube-ovn\033[0m first, then run this script!"
-  exit 1
-fi
+# Make sure required VMs are running
+for vm in k3k-kube-ovn egress-test-target; do
+  if [ "$(limactl list $vm --format '{{.Status}}' 2>/dev/null)" != "Running" ]; then
+    echo -e "\033[1;31mError: Guest VM '$vm' is not running.\033[0m"
+    echo -e "Please start it: \033[1;32mlimactl start $vm\033[0m first, then run this script!"
+    exit 1
+  fi
+done
+
+# Restart the egress-logger service on egress-test-target so logs are fresh and not spammed
+echo -e "\033[1;34mRestarting egress-logger service on egress-test-target VM...\033[0m"
+limactl shell egress-test-target sudo systemctl restart egress-logger &>/dev/null
 
 # Kill existing session if it exists
 tmux kill-session -t "$SESSION" 2>/dev/null
