@@ -4,3 +4,4 @@ kubeconfig-*.yaml
 *.swo
 .DS_Store
 tenant-*.yaml
+rke2-*.yaml
