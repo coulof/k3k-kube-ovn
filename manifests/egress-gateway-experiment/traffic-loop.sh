@@ -19,9 +19,21 @@ while true; do
   echo -e "Timestamp:         $(date +'%Y-%m-%d %H:%M:%S')"
   echo -e "---------------------------------------------------------------------"
 
-  # 1. Query Host Test Pod (Standard Main Cluster Egress - No Gateway)
-  # Scheduled on the main host's default subnet (natOutgoing: true)
-  echo -e "\033[1;33m=== 1. MAIN HOST ACTIVE PODS (Dynamic Detection) ===\033[0m"
+  # 1. Query Host Test Pods (Standard Main Cluster Egress & Isolated No-Egress)
+  # Scheduled on the main host's subnets
+  echo -e "\033[1;33m=== 1. MAIN HOST ACTIVE PODS ===\033[0m"
+
+  # Auto-apply host test pods if not running
+  if ! kubectl get pod test-pod &>/dev/null; then
+    kubectl apply -f manifests/test-pod.yaml &>/dev/null
+  fi
+  if ! kubectl get pod no-egress-pod &>/dev/null; then
+    kubectl apply -f manifests/egress-gateway-experiment/no-egress-pod.yaml &>/dev/null
+  fi
+
+  # Ensure both test pods are Ready/Running before executing commands
+  kubectl wait --for=condition=Ready pod/test-pod pod/no-egress-pod --timeout=15s &>/dev/null
+
   pods_host=$(kubectl get pods --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
   found_host_pod=false
   for pod in $pods_host; do
@@ -35,6 +47,16 @@ while true; do
       else
         echo -e "\033[1;31m[🔴 FAILED]\033[0m Error: $out"
       fi
+    elif [[ "$pod" == "no-egress-pod"* ]]; then
+      found_host_pod=true
+      echo -n "  -> Pod [${pod}] (ISOLATED | Subnet: subnet-no-egress | Expected: 🔴 TIMEOUT): "
+      out=$(kubectl exec ${pod} -- sh -c "wget -T 2 -qO- \"http://${TARGET_UNDERLAY_IP}:8888/?pod=\$(hostname)&ip=\$(ip route get ${TARGET_UNDERLAY_IP} | awk '{print \$7}')\"" 2>&1)
+      status=$?
+      if [ $status -eq 0 ]; then
+        echo -e "\033[1;31m[🔴 UNEXPECTED SUCCESS]\033[0m Response: \"$out\""
+      else
+        echo -e "\033[1;32m[🟢 EXPECTED TIMEOUT]\033[0m Error: download timed out"
+      fi
     fi
   done
   if [ "$found_host_pod" = false ]; then
@@ -44,7 +66,7 @@ while true; do
   echo
 
   # 2. Query Tenant A Workloads (Dynamic check of running pods in tenant-a namespace)
-  echo -e "\033[1;34m=== 2. TENANT-A ACTIVE WORKLOADS (Dynamic Detection) ===\033[0m"
+  echo -e "\033[1;34m=== 2. TENANT-A ACTIVE WORKLOADS ===\033[0m"
   pods_a=$(kubectl --kubeconfig tenant-a.yaml get pods -n tenant-a --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
   if [ -z "$pods_a" ]; then
     echo -e "  \033[1;30mNo running pods found in Tenant A namespace.\033[0m"
@@ -88,7 +110,7 @@ while true; do
   echo
 
   # 3. Query Tenant B Workloads (Dynamic check of running pods in tenant-b namespace)
-  echo -e "\033[1;36m=== 3. TENANT-B ACTIVE WORKLOADS (Dynamic Detection) ===\033[0m"
+  echo -e "\033[1;36m=== 3. TENANT-B ACTIVE WORKLOADS ===\033[0m"
   pods_b=$(kubectl --kubeconfig tenant-b.yaml get pods -n tenant-b --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
   if [ -z "$pods_b" ]; then
     echo -e "  \033[1;30mNo running pods found in Tenant B namespace.\033[0m"
