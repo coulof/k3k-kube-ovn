@@ -71,15 +71,6 @@ while true; do
         else
           echo -e "\033[1;31m[🔴 FAILED]\033[0m Error: $out"
         fi
-      elif [ "$subnet" = "subnet-no-egress" ]; then
-        echo -n "  -> Pod [${pod}] (ISOLATED | Subnet: ${subnet} | Expected: 🔴 TIMEOUT): "
-        out=$(kubectl --kubeconfig tenant-a.yaml exec ${pod} -n tenant-a -- sh -c "wget -T 2 -qO- \"http://${TARGET_UNDERLAY_IP}:8888/?pod=\$(hostname)&ip=\$(ip route get ${TARGET_UNDERLAY_IP} | awk '{print \$7}')\"" 2>&1)
-        status=$?
-        if [ $status -eq 0 ]; then
-          echo -e "\033[1;31m[🔴 UNEXPECTED SUCCESS]\033[0m Response: \"$out\""
-        else
-          echo -e "\033[1;32m[🟢 EXPECTED TIMEOUT]\033[0m Error: download timed out"
-        fi
       else
         # No subnet annotation / default routing
         echo -n "  -> Pod [${pod}] (Default / Bypass | Expected Egress: 192.168.104.3 - Node IP): "
@@ -123,15 +114,6 @@ while true; do
           echo -e "\033[1;32m[🟢 SUCCESS]\033[0m Response: \"$out\""
         else
           echo -e "\033[1;31m[🔴 FAILED]\033[0m Error: $out"
-        fi
-      elif [ "$subnet" = "subnet-no-egress" ]; then
-        echo -n "  -> Pod [${pod}] (ISOLATED | Subnet: ${subnet} | Expected: 🔴 TIMEOUT): "
-        out=$(kubectl --kubeconfig tenant-b.yaml exec ${pod} -n tenant-b -- sh -c "wget -T 2 -qO- \"http://${TARGET_UNDERLAY_IP}:8888/?pod=\$(hostname)&ip=\$(ip route get ${TARGET_UNDERLAY_IP} | awk '{print \$7}')\"" 2>&1)
-        status=$?
-        if [ $status -eq 0 ]; then
-          echo -e "\033[1;31m[🔴 UNEXPECTED SUCCESS]\033[0m Response: \"$out\""
-        else
-          echo -e "\033[1;32m[🟢 EXPECTED TIMEOUT]\033[0m Error: download timed out"
         fi
       else
         # No subnet annotation / default routing
