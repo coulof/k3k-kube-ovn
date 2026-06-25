@@ -232,8 +232,12 @@ bash manifests/egress-gateway-experiment/showcase-demo.sh
 ```
 
 Once started, TMUX will establish three active panes:
-*   **Left Pane:** Continuous curls from workloads inside isolated Tenant A and Tenant B virtual clusters.
-*   **Top-Right Pane:** Shows live logs from the Python verification server, demonstrating that requests from Tenant A map to the **single aggregated egress IP `192.168.105.70`**, and Tenant B to **`192.168.105.80`**.
+*   **Left Pane (Traffic Loop):** Displays a live, three-tier progression verifying egress IPs:
+    1.  **Tier 1 (Bypass Pod):** Scheduled on the default VPC network, it queries the management target `192.168.104.4:8888`. It bypasses any egress gateway and egresses natively with the **Node IP (`192.168.104.3`)**.
+    2.  **Tier 2 (Tenant A Pods):** Scheduled on `vpc-tenant-a`, they query the underlay target `192.168.105.100:8888`. They route through `gateway-tenant-a` and egress with the **aggregated static IP `192.168.105.70`**.
+    3.  **Tier 3 (Tenant B Pods):** Scheduled on `vpc-tenant-b`, they query the underlay target `192.168.105.100:8888`. They route through `gateway-tenant-b` and egress with the **aggregated static IP `192.168.105.80`**.
+*   **Top-Right Pane:** Shows live logs from the Python verification server running on `egress-test-target`, demonstrating the different recorded Source IPs in real time.
+
 *   **Bottom-Right Pane:** Interactive control console to explore the OVN configuration on the guest VM.
 
 ---

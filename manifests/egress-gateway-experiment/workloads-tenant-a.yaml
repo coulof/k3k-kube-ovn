@@ -27,3 +27,19 @@ spec:
   - name: client
     image: alpine
     command: ["sh", "-c", "sleep 36000"]
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: no-egress-pod
+  namespace: tenant-a
+  annotations:
+    ovn.kubernetes.io/logical_switch: subnet-no-egress
+spec:
+  containers:
+  - name: client
+    image: alpine
+    command: ["sh", "-c", "sleep 36000"]
+
+

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # File: manifests/egress-gateway-experiment/egress-logger.py
-# Purpose: Beautiful, lightweight macOS HTTP server to log incoming client egress IPs
+# Purpose: Beautiful, lightweight egress-demo-control VM HTTP server to log incoming client egress IPs
 
 import http.server
 import socketserver
@@ -32,7 +32,7 @@ class LoggerHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "text/plain")
         self.end_headers()
         
-        resp_msg = f"Hello from macOS! Your egress IP is {client_ip}"
+        resp_msg = f"Hello from egress-demo-control VM! Your egress IP is {client_ip}"
         if pod_name:
             resp_msg += f" (Hello, {pod_name}!)"
         resp_msg += "\n"
@@ -45,7 +45,7 @@ socketserver.TCPServer.allow_reuse_address = True
 try:
     with socketserver.TCPServer(("0.0.0.0", 8888), LoggerHandler) as httpd:
         print("\033[1;35m====================================================================\033[0m")
-        print("\033[1;35m          macOS NATIVE EGRESS IP VERIFICATION SERVER LOGS           \033[0m")
+        print("\033[1;35m          EGRESS-DEMO-CONTROL VM IP VERIFICATION SERVER LOGS        \033[0m")
         print("\033[1;35m====================================================================\033[0m")
         print("Listening on port 8888... Press Ctrl+C to terminate.")
         print("--------------------------------------------------------------------")

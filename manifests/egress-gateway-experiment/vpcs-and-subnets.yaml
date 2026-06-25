@@ -40,6 +40,26 @@ spec:
 apiVersion: kubeovn.io/v1
 kind: Subnet
 metadata:
+  name: subnet-no-egress
+spec:
+  vpc: vpc-tenant-a
+  cidrBlock: 10.15.0.0/16
+  default: false
+  enableLb: true
+  excludeIps:
+  - 10.15.0.1
+  gateway: 10.15.0.1
+  gatewayType: distributed
+  gatewayNode: "lima-k3k-kube-ovn"
+  natOutgoing: false
+  private: false
+  protocol: IPv4
+  provider: ovn
+
+---
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
   name: subnet-tenant-b
 spec:
   vpc: vpc-tenant-b
