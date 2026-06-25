@@ -52,6 +52,27 @@ provision:
         systemctl disable --now firewalld || true
       fi
 
+      # Tune openSUSE network interfaces to prevent gateway collisions on multi-interface setups
+      # and ensure eth0 retains sole default routing authority.
+      echo "Tuning interface configurations to prevent DHCP gateway collisions..."
+      echo 'DHCLIENT_SET_DEFAULT_ROUTE="yes"' >> /etc/sysconfig/network/ifcfg-eth0
+
+      cat <<EOF > /etc/sysconfig/network/ifcfg-lima1
+BOOTPROTO='dhcp'
+STARTMODE='auto'
+DHCLIENT_SET_DEFAULT_ROUTE='no'
+EOF
+
+      cat <<EOF > /etc/sysconfig/network/ifcfg-lima2
+BOOTPROTO='dhcp'
+STARTMODE='auto'
+DHCLIENT_SET_DEFAULT_ROUTE='no'
+IPADDR_1='192.168.106.2/24'
+EOF
+
+      echo "Restarting wicked network service..."
+      systemctl restart wicked.service || true
+
       # Ensure IP forwarding is enabled
       sysctl -w net.ipv4.ip_forward=1
       echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/90-rke2-ip-forward.conf

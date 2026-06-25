@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # File: manifests/egress-gateway-experiment/traffic-loop.sh
-# Purpose: Continuous verification of Kube-OVN Egress IP aggregation across multiple pods, contrasting Bypass (No Gateway), Gateway SNAT, and Isolated No-Egress configurations
+# Purpose: Continuous verification of Kube-OVN Egress IP aggregation across multiple pods, contrasting Bypass (No Gateway) and Gateway SNAT configurations
 
 # Enforce tmux-256color terminal type for high-fidelity interactive display
 export TERM=tmux-256color
@@ -9,7 +9,32 @@ export TERM=tmux-256color
 TARGET_UNDERLAY_IP="192.168.105.100"
 TARGET_MGT_IP="192.168.104.4"
 
+# Ensure we source the correct RKE2 profile
+[ -f /etc/profile.d/rke2.sh ] && source /etc/profile.d/rke2.sh
+
+# -----------------------------------------------------------------------------
+# Bootstrap & Initialization Sequence (Visible loading screen)
+# -----------------------------------------------------------------------------
 clear
+echo -e "\033[1;35m=====================================================================\033[0m"
+echo -e "     LIVE MULTI-POD EGRESS IP FLOWS -> egress-demo-control VM        \033[0m"
+echo -e "\033[1;35m=====================================================================\033[0m"
+echo -e "\n  \033[1;33m🔄 Initializing Main Host Test Pods... Please wait...\033[0m"
+echo -e "  -> Ensuring 'test-pod' is deployed on the host..."
+
+# Auto-apply host test pods if not running
+if ! kubectl get pod test-pod &>/dev/null; then
+  echo -e "  -> Deploying 'test-pod' (Default egress)..."
+  kubectl apply -f manifests/test-pod.yaml &>/dev/null
+fi
+
+echo -e "  -> Waiting for pods to become Ready/Running (usually instant if cached)..."
+kubectl wait --for=condition=Ready pod/test-pod --timeout=30s &>/dev/null
+
+echo -e "  \033[1;32m🟢 Initialization Complete! Launching dynamic validation loop...\033[0m"
+sleep 1
+clear
+
 while true; do
   # Gather all output in a buffer to avoid screen redraw flickering / half-drawn states
   output_buffer=$(
@@ -21,20 +46,21 @@ while true; do
     echo -e "Timestamp:         $(date +'%Y-%m-%d %H:%M:%S')"
     echo -e "---------------------------------------------------------------------"
 
-    # 1. Query Host Test Pods (Standard Main Cluster Egress & Isolated No-Egress)
+    # 1. Query Host Test Pods (Standard Main Cluster Egress)
     # Scheduled on the main host's subnets
     echo -e "\033[1;33m=== 1. MAIN HOST ACTIVE PODS ===\033[0m"
 
-    # Auto-apply host test pods if not running
+    # Fast-path check: only apply and wait if pods are actually missing
+    need_wait=false
     if ! kubectl get pod test-pod &>/dev/null; then
       kubectl apply -f manifests/test-pod.yaml &>/dev/null
-    fi
-    if ! kubectl get pod no-egress-pod &>/dev/null; then
-      kubectl apply -f manifests/egress-gateway-experiment/no-egress-pod.yaml &>/dev/null
+      need_wait=true
     fi
 
-    # Ensure both test pods are Ready/Running before executing commands
-    kubectl wait --for=condition=Ready pod/test-pod pod/no-egress-pod --timeout=15s &>/dev/null
+    # Only run kubectl wait on the hot-path if a pod had to be re-applied
+    if [ "$need_wait" = "true" ]; then
+      kubectl wait --for=condition=Ready pod/test-pod --timeout=10s &>/dev/null
+    fi
 
     pods_host=$(kubectl get pods --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
     found_host_pod=false
@@ -48,16 +74,6 @@ while true; do
           echo -e "\033[1;32m[🟢 SUCCESS]\033[0m Response: \"$out\""
         else
           echo -e "\033[1;31m[🔴 FAILED]\033[0m Error: $out"
-        fi
-      elif [[ "$pod" == "no-egress-pod"* ]]; then
-        found_host_pod=true
-        echo -n "  -> Pod [${pod}] (ISOLATED | Subnet: subnet-no-egress | Expected: 🔴 TIMEOUT): "
-        out=$(kubectl exec ${pod} -- sh -c "wget -T 2 -qO- \"http://${TARGET_UNDERLAY_IP}:8888/?pod=\$(hostname)&ip=\$(ip route get ${TARGET_UNDERLAY_IP} | awk '{print \$7}')\"" 2>&1)
-        status=$?
-        if [ $status -eq 0 ]; then
-          echo -e "\033[1;31m[🔴 UNEXPECTED SUCCESS]\033[0m Response: \"$out\""
-        else
-          echo -e "\033[1;32m[🟢 EXPECTED TIMEOUT]\033[0m Error: download timed out"
         fi
       fi
     done
