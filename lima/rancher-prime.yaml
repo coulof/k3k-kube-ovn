@@ -155,10 +155,10 @@ provision:
       echo "Waiting for Rancher Prime rollout to complete..."
       kubectl -n cattle-system rollout status deployment/rancher --timeout=600s
 
-      # 8. Install and configure bash-completion
-      if ! rpm -q bash-completion &>/dev/null; then
-        echo "Installing bash-completion..."
-        zypper --non-interactive install -y bash-completion
+      # 8. Install and configure bash-completion and full terminfo
+      if ! rpm -q bash-completion terminfo &>/dev/null; then
+        echo "Installing bash-completion and terminfo..."
+        zypper --non-interactive install -y bash-completion terminfo
       fi
 
       echo "Generating kubectl and helm system-wide bash completions..."

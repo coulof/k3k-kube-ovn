@@ -300,10 +300,10 @@ provision:
       #!/bin/bash
       set -eux -o pipefail
 
-      # Ensure socat is installed (required for forwarding loopback traffic to Rancher Prime)
-      if ! command -v socat &>/dev/null; then
-        echo "Installing socat..."
-        zypper --non-interactive install -y socat || true
+      # Ensure socat and full terminfo are installed (required for loopback proxying and tmux terminal capabilities)
+      if ! rpm -q socat terminfo &>/dev/null; then
+        echo "Installing socat and terminfo..."
+        zypper --non-interactive install -y socat terminfo || true
       fi
 
       # Set up a systemd service to dynamically synchronize the IP of 'lima-rancher-prime.internal'
