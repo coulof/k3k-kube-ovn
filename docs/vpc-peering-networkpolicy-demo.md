@@ -45,20 +45,22 @@ This diagram illustrates how virtual cluster control plane pods and virtual kube
 } }%%
 graph TD
     classDef default fill:#ffffff,stroke:#212529,stroke-width:1px,color:#212529;
-    classDef host fill:#f8f9fa,stroke:#495057,stroke-width:2px,color:#212529;
-    classDef ns fill:#ffffff,stroke:#1c7ed6,stroke-width:2.5px,color:#0b2e5c;
+    classDef apiServer fill:#ffffff,stroke:#0ca678,stroke-width:3px,color:#092a1d;
+    classDef tenantA fill:#ffffff,stroke:#1c7ed6,stroke-width:2.5px,color:#0b2e5c;
+    classDef tenantB fill:#ffffff,stroke:#2b8a3e,stroke-width:2.5px,color:#0b2e1b;
+    classDef ns fill:#f8f9fa,stroke:#adb5bd,stroke-width:1.5px,stroke-dasharray: 3 3,color:#495057;
 
     subgraph Host RKE2 Cluster [Host RKE2 Cluster - Default VPC: ovn-cluster]
-        api["Host API Server<br/>10.43.0.1:443"]:::host
+        api["Host API Server<br/>10.43.0.1:443"]:::apiServer
         
         subgraph NSA ["Host Namespace: k3k-tenant-a"]
-            ctrl-a["k3k Server-0<br/>(Virtual Control Plane Pod)<br/>IP: 10.42.x.x"]:::host
-            kl-a["k3k Kubelet<br/>(Virtual Kubelet Agent)<br/>IP: 10.42.x.x"]:::host
+            ctrl-a["k3k Server-0<br/>(Virtual Control Plane Pod)<br/>IP: 10.42.x.x"]:::tenantA
+            kl-a["k3k Kubelet<br/>(Virtual Kubelet Agent)<br/>IP: 10.42.x.x"]:::tenantA
         end
 
         subgraph NSB ["Host Namespace: k3k-tenant-b"]
-            ctrl-b["k3k Server-0<br/>(Virtual Control Plane Pod)<br/>IP: 10.42.x.x"]:::host
-            kl-b["k3k Kubelet<br/>(Virtual Kubelet Agent)<br/>IP: 10.42.x.x"]:::host
+            ctrl-b["k3k Server-0<br/>(Virtual Control Plane Pod)<br/>IP: 10.42.x.x"]:::tenantB
+            kl-b["k3k Kubelet<br/>(Virtual Kubelet Agent)<br/>IP: 10.42.x.x"]:::tenantB
         end
     end
 
