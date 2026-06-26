@@ -130,7 +130,7 @@ graph LR
     subgraph VM1 [VM: k3k-kube-ovn - Host CNI Logical Bridging]
         direction LR
         subgraph OVS [OVS Bridging Layer]
-            direction LR
+            direction TB
             br_egress["OVS Bridge: br-egress<br/>(Attaches eth1 as port)"]:::autoCni
             patch["OVS Patch Ports<br/>(Dynamic peer connection)"]:::autoCni
             br_int["OVS Integration Bridge: br-int<br/>(Core overlay/underlay bridging)"]:::autoCni
@@ -138,7 +138,7 @@ graph LR
         end
 
         subgraph K8s [Kube-OVN Underlay Objects]
-            direction LR
+            direction TB
             pn["ProviderNetwork: egress<br/>(Binds to physical NIC)"]:::userSpec
             vlan["Vlan: egress-vlan<br/>(Flat VLAN - ID: 0)"]:::userSpec
             sub_ext["Subnet: external-egress-subnet<br/>(192.168.105.0/24)"]:::userSpec
