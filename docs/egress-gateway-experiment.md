@@ -116,7 +116,7 @@ This diagram zooms inside the host VM `k3k-kube-ovn` to illustrate how the physi
     'edgeLabelBackground':'#ffffff'
   }
 } }%%
-graph TD
+graph LR
     classDef default fill:#ffffff,stroke:#212529,stroke-width:1px,color:#212529;
     classDef net fill:#f8f9fa,stroke:#adb5bd,stroke-width:2px,stroke-dasharray: 5 5,color:#212529;
     classDef vm fill:#ffffff,stroke:#1c7ed6,stroke-width:3px,color:#0b2e5c;
@@ -128,8 +128,9 @@ graph TD
     eth1["Host NIC: eth1<br/>(No Host IP Assigned)"]:::userSpec
 
     subgraph VM1 [VM: k3k-kube-ovn - Host CNI Logical Bridging]
-        direction TB
+        direction LR
         subgraph OVS [OVS Bridging Layer]
+            direction LR
             br_egress["OVS Bridge: br-egress<br/>(Attaches eth1 as port)"]:::autoCni
             patch["OVS Patch Ports<br/>(Dynamic peer connection)"]:::autoCni
             br_int["OVS Integration Bridge: br-int<br/>(Core overlay/underlay bridging)"]:::autoCni
