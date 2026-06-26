@@ -23,9 +23,9 @@ The entire testing setup lives within three unprivileged Lima virtual networks:
 2.  **`user-v2-egress` (`192.168.105.0/24`)**: The external "underlay" egress subnet.
 3.  **`user-v2-node` (`192.168.106.0/24`)**: Stable node interconnection network.
 
-### 1. L2 Physical Topology (NICs & Multus Mapping)
+### 1. L2 Physical Network & VM Topology
 
-This diagram outlines how the underlying guest virtual interfaces map to Lima's user-space virtual networks, and how Multus bridges `eth1` to Kube-OVN's physical underlay routing.
+This diagram outlines how the underlying guest VM virtual interfaces map to Lima's user-space virtual networks, establishing the baseline network interconnectivity between the host cluster and the validation target.
 
 ```mermaid
 %%{init: {
@@ -33,47 +33,39 @@ This diagram outlines how the underlying guest virtual interfaces map to Lima's 
   'themeVariables': {
     'fontFamily': 'SUSE, sans-serif',
     'fontSize': '14px',
-    'primaryColor': '#30ba78',
-    'primaryTextColor': '#0c322c',
-    'primaryBorderColor': '#30ba78',
-    'lineColor': '#0c322c',
-    'secondaryColor': '#0c322c',
-    'tertiaryColor': '#90ebcd',
+    'primaryColor': '#0ca678',
+    'primaryTextColor': '#092a1d',
+    'primaryBorderColor': '#0ca678',
+    'lineColor': '#212529',
+    'secondaryColor': '#1c7ed6',
+    'tertiaryColor': '#e6fcf5',
     'mainBkg': '#ffffff',
-    'nodeBorder': '#0c322c',
-    'clusterBkg': '#efefef',
-    'clusterBorder': '#90ebcd',
-    'titleColor': '#0c322c',
+    'nodeBorder': '#212529',
+    'clusterBkg': '#f8f9fa',
+    'clusterBorder': '#adb5bd',
+    'titleColor': '#092a1d',
     'edgeLabelBackground':'#ffffff'
   }
 } }%%
 graph TD
-    classDef default fill:#ffffff,stroke:#0c322c,stroke-width:1px,color:#0c322c;
-    classDef net fill:#efefef,stroke:#90ebcd,stroke-width:2px,stroke-dasharray: 5 5,color:#0c322c;
-    classDef vm fill:#ffffff,stroke:#30ba78,stroke-width:2px,color:#0c322c;
+    classDef default fill:#ffffff,stroke:#212529,stroke-width:1px,color:#212529;
+    classDef net fill:#f8f9fa,stroke:#adb5bd,stroke-width:2px,stroke-dasharray: 5 5,color:#212529;
+    classDef vm fill:#ffffff,stroke:#1c7ed6,stroke-width:3px,color:#0b2e5c;
 
     %% TOP LAYER: VM k3k-kube-ovn
     subgraph VM1 [VM: k3k-kube-ovn - Host Cluster Control Plane]
         direction LR
         eth0_1["eth0 <br/> DHCP Management IP"]
+        eth1_1["eth1 <br/> No Host IP <br/> Bound to OVS Bridge"]
         eth2_1["eth2 <br/> 192.168.106.2 <br/> Stable Node IP"]
-        eth1_1["eth1 <br/> No Host IP <br/> Bound to OVS br-egress"]
-        
-        subgraph K8s [Kube-OVN Provider Bridging]
-            pn["ProviderNetwork: egress"]
-            vlan["Vlan: egress-vlan<br/>(Flat VLAN - ID: 0)"]
-            sub_ext["Subnet: external-egress-subnet<br/>(192.168.105.0/24)"]
-            pn --> vlan --> sub_ext
-        end
-        eth1_1 --- pn
     end
 
     %% MIDDLE LAYER: Dotted L2 Virtual Networks (Aligned Horizontally)
     subgraph L2Networks [Lima Virtual L2 Networks / Switches]
         direction LR
         NetMgt["Net: user-v2 <br/> Management Network <br/> 192.168.104.0/24"]
-        NetNode["Net: user-v2-node <br/> Core Node Network <br/> 192.168.106.0/24"]
         NetEgress["Net: user-v2-egress <br/> External L2 Underlay <br/> 192.168.105.0/24"]
+        NetNode["Net: user-v2-node <br/> Core Node Network <br/> 192.168.106.0/24"]
     end
 
     %% BOTTOM LAYER: VM egress-test-target
@@ -89,15 +81,84 @@ graph TD
     eth0_1 <--> NetMgt
     NetMgt <--> eth0_2
 
-    eth2_1 <--> NetNode
-
     eth1_1 <--> NetEgress
     NetEgress <--> eth1_2
+
+    eth2_1 <--> NetNode
 
     %% Apply class styles cleanly
     class NetMgt,NetEgress,NetNode net;
     class VM1,VM2 vm;
-    class pn,vlan,sub_ext,srv default;
+    class srv default;
+```
+
+### 1.5 Kube-OVN Provider Bridging & CNI Layer
+
+This diagram zooms inside the host VM `k3k-kube-ovn` to illustrate how the physical interface `eth1` is bridged dynamically to Kube-OVN's custom resources (`ProviderNetwork`, `Vlan`, `Subnet`), which establishes the dedicated underlay datapath for our SNAT gateways.
+
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'fontFamily': 'SUSE, sans-serif',
+    'fontSize': '14px',
+    'primaryColor': '#0ca678',
+    'primaryTextColor': '#092a1d',
+    'primaryBorderColor': '#0ca678',
+    'lineColor': '#212529',
+    'secondaryColor': '#1c7ed6',
+    'tertiaryColor': '#e6fcf5',
+    'mainBkg': '#ffffff',
+    'nodeBorder': '#212529',
+    'clusterBkg': '#f8f9fa',
+    'clusterBorder': '#adb5bd',
+    'titleColor': '#092a1d',
+    'edgeLabelBackground':'#ffffff'
+  }
+} }%%
+graph LR
+    classDef default fill:#ffffff,stroke:#212529,stroke-width:1px,color:#212529;
+    classDef net fill:#f8f9fa,stroke:#adb5bd,stroke-width:2px,stroke-dasharray: 5 5,color:#212529;
+    classDef vm fill:#ffffff,stroke:#1c7ed6,stroke-width:3px,color:#0b2e5c;
+    classDef userSpec fill:#e6fcf5,stroke:#0ca678,stroke-width:2.5px,color:#092a1d;
+    classDef autoCni fill:#edf2ff,stroke:#4c6ef5,stroke-width:2.5px,color:#101d42;
+
+    %% PHYSICAL & UNDERLAY INTERFACES
+    SubNet["Lima L2 Network: user-v2-egress<br/>(192.168.105.0/24 Subnet)"]:::net
+    eth1["Host NIC: eth1<br/>(No Host IP Assigned)"]:::userSpec
+
+    subgraph VM1 [VM: k3k-kube-ovn - Host CNI Logical Bridging]
+        direction LR
+        subgraph OVS [OVS Bridging Layer]
+            direction TB
+            br_egress["OVS Bridge: br-egress<br/>(Attaches eth1 as port)"]:::autoCni
+            patch["OVS Patch Ports<br/>(Dynamic peer connection)"]:::autoCni
+            br_int["OVS Integration Bridge: br-int<br/>(Core overlay/underlay bridging)"]:::autoCni
+            br_egress <--> patch <--> br_int
+        end
+
+        subgraph K8s [Kube-OVN Underlay Objects]
+            direction TB
+            pn["ProviderNetwork: egress<br/>(Binds to physical NIC)"]:::userSpec
+            vlan["Vlan: egress-vlan<br/>(Flat VLAN - ID: 0)"]:::userSpec
+            sub_ext["Subnet: external-egress-subnet<br/>(192.168.105.0/24)"]:::userSpec
+            pn --> vlan --> sub_ext
+        end
+    end
+
+    %% Legend
+    subgraph Legend [Legend / Coloring Scheme]
+        direction LR
+        L1["User-Provisioned / Applied YAMLs"]:::userSpec
+        L2["Auto-Created by Kube-OVN / OVS"]:::autoCni
+    end
+
+    %% Mappings
+    SubNet <--> eth1
+    eth1 <--> br_egress
+    br_int <--> pn
+    
+    class VM1 vm;
 ```
 
 ### 2. L3 Logical Data-Path Topology
@@ -110,26 +171,26 @@ This diagram shows how workloads in guest namespaces (`tenant-a` and `tenant-b`)
   'themeVariables': {
     'fontFamily': 'SUSE, sans-serif',
     'fontSize': '14px',
-    'primaryColor': '#30ba78',
-    'primaryTextColor': '#0c322c',
-    'primaryBorderColor': '#30ba78',
-    'lineColor': '#0c322c',
-    'secondaryColor': '#0c322c',
-    'tertiaryColor': '#90ebcd',
+    'primaryColor': '#0ca678',
+    'primaryTextColor': '#092a1d',
+    'primaryBorderColor': '#0ca678',
+    'lineColor': '#212529',
+    'secondaryColor': '#1c7ed6',
+    'tertiaryColor': '#e6fcf5',
     'mainBkg': '#ffffff',
-    'nodeBorder': '#0c322c',
-    'clusterBkg': '#efefef',
-    'clusterBorder': '#90ebcd',
-    'titleColor': '#0c322c',
+    'nodeBorder': '#212529',
+    'clusterBkg': '#f8f9fa',
+    'clusterBorder': '#adb5bd',
+    'titleColor': '#092a1d',
     'edgeLabelBackground':'#ffffff'
   }
 } }%%
 graph TD
     %% Styling
-    classDef default fill:#ffffff,stroke:#0c322c,stroke-width:1px,color:#0c322c;
-    classDef target fill:#efefef,stroke:#0c322c,stroke-width:2px,color:#0c322c;
-    classDef tenantA fill:#90ebcd,stroke:#0c322c,stroke-width:2px,color:#0c322c;
-    classDef tenantB fill:#30ba78,stroke:#0c322c,stroke-width:2px,color:#0c322c;
+    classDef default fill:#ffffff,stroke:#212529,stroke-width:1px,color:#212529;
+    classDef target fill:#f8f9fa,stroke:#adb5bd,stroke-width:2px,color:#212529;
+    classDef tenantA fill:#e6fcf5,stroke:#0ca678,stroke-width:2px,color:#092a1d;
+    classDef tenantB fill:#eafaf1,stroke:#2b8a3e,stroke-width:2px,color:#0b2e1b;
 
     subgraph targetVM [VM: egress-test-target]
         srv["Egress Logger Server<br/>(Python HTTP)<br/>IP: 192.168.105.100:8888<br/>Interface: eth1"]:::target
@@ -214,13 +275,24 @@ limactl create --name egress-test-target lima/egress-test-target.yaml
 limactl start egress-test-target
 ```
 
-### Step 2: Apply Infrastructure & Workload Manifests
-Apply the egress network configurations, VPCs, subnets, and tenant workloads:
+### Step 2: Apply Infrastructure, Spin Up Virtual Clusters, & Extract Guest Credentials
+Apply the egress network configurations, VPCs, subnets, and deploy virtual clusters, then extract guest credentials and apply tenant workloads:
+
 ```bash
-# Apply native Multi-VPC and VpcEgressGateway resources
+# 1. Apply native Multi-VPC and VpcEgressGateway resources
 limactl shell k3k-kube-ovn kubectl apply -f manifests/egress-gateway-experiment/vpcs-and-subnets.yaml
 
-# Apply client workloads to respective tenant guest clusters
+# 2. Deploy dual virtual clusters for Tenant A and Tenant B
+limactl shell k3k-kube-ovn kubectl apply -f manifests/vpc-peering-experiment/k3k-clusters.yaml
+
+# 3. Wait for virtual clusters to register as Ready
+limactl shell k3k-kube-ovn kubectl get clusters.k3k.io -A
+
+# 4. Extract tenant guest cluster kubeconfigs
+limactl shell k3k-kube-ovn "kubectl get secret k3k-tenant-a-kubeconfig -n k3k-tenant-a -o jsonpath='{.data.kubeconfig\.yaml}' | base64 -d > tenant-a.yaml"
+limactl shell k3k-kube-ovn "kubectl get secret k3k-tenant-b-kubeconfig -n k3k-tenant-b -o jsonpath='{.data.kubeconfig\.yaml}' | base64 -d > tenant-b.yaml"
+
+# 5. Apply client workloads to respective tenant guest clusters
 limactl shell k3k-kube-ovn kubectl --kubeconfig tenant-a.yaml apply -f manifests/egress-gateway-experiment/workloads-tenant-a.yaml
 limactl shell k3k-kube-ovn kubectl --kubeconfig tenant-b.yaml apply -f manifests/egress-gateway-experiment/workloads-tenant-b.yaml
 ```
