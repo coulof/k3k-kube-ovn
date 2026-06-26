@@ -37,7 +37,7 @@ This diagram illustrates how virtual cluster control plane pods and virtual kube
     'tertiaryColor': '#e6fcf5',
     'mainBkg': '#ffffff',
     'nodeBorder': '#212529',
-    'clusterBkg': '#f8f9fa',
+    'clusterBkg': '#ffffff',
     'clusterBorder': '#adb5bd',
     'titleColor': '#092a1d',
     'edgeLabelBackground':'#ffffff'
@@ -48,7 +48,7 @@ graph TD
     classDef apiServer fill:#ffffff,stroke:#0ca678,stroke-width:3px,color:#092a1d;
     classDef tenantA fill:#ffffff,stroke:#1c7ed6,stroke-width:2.5px,color:#0b2e5c;
     classDef tenantB fill:#ffffff,stroke:#2b8a3e,stroke-width:2.5px,color:#0b2e1b;
-    classDef ns fill:#f8f9fa,stroke:#adb5bd,stroke-width:1.5px,stroke-dasharray: 3 3,color:#495057;
+    classDef ns fill:#ffffff,stroke:#adb5bd,stroke-width:1.5px,stroke-dasharray: 3 3,color:#495057;
 
     subgraph Host RKE2 Cluster [Host RKE2 Cluster - Default VPC: ovn-cluster]
         api["Host API Server<br/>10.43.0.1:443"]:::apiServer
