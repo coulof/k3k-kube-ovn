@@ -17,7 +17,11 @@ To leverage Kube-OVN's custom `Vpc` routing without breaking the virtual control
 ## 🗺️ Architectural Diagrams
 
 ### 1. Network Topology & Traffic Flows
-The diagram below illustrates the multi-VPC isolation, the OVN-level peering tunnel, and the host-enforced NetworkPolicy filtering:
+
+To provide complete architectural clarity, the system topology is split into two independent, focused representations:
+
+#### 1.1 Control-Plane & Metadata Delegation (API Communications)
+This diagram illustrates how virtual cluster control plane pods and virtual kubelet agents—running natively in the host default VPC namespace—communicate with the host cluster's Kubernetes API server, satisfying the **Metadata Delegation Pattern**:
 
 ```mermaid
 %%{init: {
@@ -25,62 +29,91 @@ The diagram below illustrates the multi-VPC isolation, the OVN-level peering tun
   'themeVariables': {
     'fontFamily': 'SUSE, sans-serif',
     'fontSize': '14px',
-    'primaryColor': '#30ba78',
-    'primaryTextColor': '#0c322c',
-    'primaryBorderColor': '#30ba78',
-    'lineColor': '#0c322c',
-    'secondaryColor': '#0c322c',
-    'tertiaryColor': '#90ebcd',
+    'primaryColor': '#0ca678',
+    'primaryTextColor': '#092a1d',
+    'primaryBorderColor': '#0ca678',
+    'lineColor': '#212529',
+    'secondaryColor': '#1c7ed6',
+    'tertiaryColor': '#e6fcf5',
     'mainBkg': '#ffffff',
-    'nodeBorder': '#0c322c',
-    'clusterBkg': '#efefef',
-    'clusterBorder': '#90ebcd',
-    'titleColor': '#0c322c',
+    'nodeBorder': '#212529',
+    'clusterBkg': '#f8f9fa',
+    'clusterBorder': '#adb5bd',
+    'titleColor': '#092a1d',
     'edgeLabelBackground':'#ffffff'
   }
 } }%%
 graph TD
-    %% Styling
-    classDef default fill:#ffffff,stroke:#0c322c,stroke-width:1px,color:#0c322c;
-    classDef host fill:#efefef,stroke:#0c322c,stroke-width:1px,color:#0c322c;
-    classDef vpcA fill:#90ebcd,stroke:#0c322c,stroke-width:2px,color:#0c322c;
-    classDef vpcB fill:#30ba78,stroke:#0c322c,stroke-width:2px,color:#0c322c;
-    classDef highlight stroke:#fe7c3f,stroke-width:2px;
+    classDef default fill:#ffffff,stroke:#212529,stroke-width:1px,color:#212529;
+    classDef host fill:#f8f9fa,stroke:#495057,stroke-width:2px,color:#212529;
+    classDef ns fill:#ffffff,stroke:#1c7ed6,stroke-width:2.5px,color:#0b2e5c;
 
     subgraph Host RKE2 Cluster [Host RKE2 Cluster - Default VPC: ovn-cluster]
-        api["Host API Server<br/>10.43.0.1"]:::host
+        api["Host API Server<br/>10.43.0.1:443"]:::host
         
-        subgraph Host Namespace: k3k-tenant-a
-            ctrl-a["k3k Server-0<br/>10.42.x.x"]:::host
-            kl-a["k3k Kubelet<br/>10.42.x.x"]:::host
+        subgraph NSA ["Host Namespace: k3k-tenant-a"]
+            ctrl-a["k3k Server-0<br/>(Virtual Control Plane Pod)<br/>IP: 10.42.x.x"]:::host
+            kl-a["k3k Kubelet<br/>(Virtual Kubelet Agent)<br/>IP: 10.42.x.x"]:::host
         end
 
-        subgraph Host Namespace: k3k-tenant-b
-            ctrl-b["k3k Server-0<br/>10.42.x.x"]:::host
-            kl-b["k3k Kubelet<br/>10.42.x.x"]:::host
+        subgraph NSB ["Host Namespace: k3k-tenant-b"]
+            ctrl-b["k3k Server-0<br/>(Virtual Control Plane Pod)<br/>IP: 10.42.x.x"]:::host
+            kl-b["k3k Kubelet<br/>(Virtual Kubelet Agent)<br/>IP: 10.42.x.x"]:::host
         end
     end
 
-    subgraph Isolated VPC: vpc-tenant-a
+    %% API Communications (Control Plane Path)
+    ctrl-a -->|Host Routing| api
+    ctrl-b -->|Host Routing| api
+    kl-a -->|Host Routing| api
+    kl-b -->|Host Routing| api
+
+    class NSA,NSB ns;
+```
+
+#### 1.2 Data-Plane Peering & Traffic Control (Multi-VPC Isolation)
+This diagram illustrates how the guest tenant workloads run in isolated L3 custom VPCs and communicate securely over OVN-level logical patch peerings, subject to host-enforced OVS ACL/NetworkPolicy filtering:
+
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'fontFamily': 'SUSE, sans-serif',
+    'fontSize': '14px',
+    'primaryColor': '#0ca678',
+    'primaryTextColor': '#092a1d',
+    'primaryBorderColor': '#0ca678',
+    'lineColor': '#212529',
+    'secondaryColor': '#1c7ed6',
+    'tertiaryColor': '#e6fcf5',
+    'mainBkg': '#ffffff',
+    'nodeBorder': '#212529',
+    'clusterBkg': '#f8f9fa',
+    'clusterBorder': '#adb5bd',
+    'titleColor': '#092a1d',
+    'edgeLabelBackground':'#ffffff'
+  }
+} }%%
+graph TD
+    classDef default fill:#ffffff,stroke:#212529,stroke-width:1px,color:#212529;
+    classDef vpcA fill:#e6fcf5,stroke:#0ca678,stroke-width:2.5px,color:#092a1d;
+    classDef vpcB fill:#eafaf1,stroke:#2b8a3e,stroke-width:2.5px,color:#0b2e1b;
+    classDef highlight fill:#fff4e6,stroke:#f76707,stroke-width:2.5px,color:#5c1d00;
+
+    subgraph VPCA ["Isolated VPC: vpc-tenant-a"]
         client["client-pod<br/>(Subnet: subnet-tenant-a)<br/>IP: 10.10.0.2"]:::vpcA
     end
 
-    subgraph Isolated VPC: vpc-tenant-b
+    subgraph VPCB ["Isolated VPC: vpc-tenant-b"]
         server["server-pod<br/>(Subnet: subnet-tenant-b)<br/>IP: 10.20.0.2"]:::vpcB
     end
 
-    %% Peering Link
-    client -- "1. OVN Peering Tunnel<br/>(169.254.1.0/30 Link)" --> server
+    %% Peering Link & Security Rule Filtering
+    client -- "1. OVN Peering Tunnel<br/>(Dynamic 169.254.1.0/30 Link)" --> server
     server -. "2. Filtered by Host ACLs<br/>(Drop Ingress on Port 8080)" .-> client
-    
-    %% API Communications
-    ctrl-a --> api
-    ctrl-b --> api
-    kl-a --> api
-    kl-b --> api
 
-    linkStyle 0 stroke:#0c322c,stroke-width:2px;
-    linkStyle 1 stroke:#fe7c3f,stroke-width:2px,stroke-dasharray: 5 5;
+    linkStyle 0 stroke:#0ca678,stroke-width:2.5px;
+    linkStyle 1 stroke:#f76707,stroke-width:2.5px,stroke-dasharray: 5 5;
 ```
 
 ### 2. Multi-Phase Experimental Sequence
@@ -92,17 +125,17 @@ The lifecycle of the experiment progresses through three distinct phases:
   'themeVariables': {
     'fontFamily': 'SUSE, sans-serif',
     'fontSize': '14px',
-    'primaryColor': '#30ba78',
-    'primaryTextColor': '#0c322c',
-    'primaryBorderColor': '#30ba78',
-    'lineColor': '#0c322c',
-    'secondaryColor': '#0c322c',
-    'tertiaryColor': '#90ebcd',
+    'primaryColor': '#0ca678',
+    'primaryTextColor': '#092a1d',
+    'primaryBorderColor': '#0ca678',
+    'lineColor': '#212529',
+    'secondaryColor': '#1c7ed6',
+    'tertiaryColor': '#e6fcf5',
     'mainBkg': '#ffffff',
-    'nodeBorder': '#0c322c',
-    'clusterBkg': '#efefef',
-    'clusterBorder': '#90ebcd',
-    'titleColor': '#0c322c',
+    'nodeBorder': '#212529',
+    'clusterBkg': '#f8f9fa',
+    'clusterBorder': '#adb5bd',
+    'titleColor': '#092a1d',
     'edgeLabelBackground':'#ffffff'
   }
 } }%%
