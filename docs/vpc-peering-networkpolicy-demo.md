@@ -46,8 +46,8 @@ This diagram illustrates how virtual cluster control plane pods and virtual kube
 graph TD
     classDef default fill:#ffffff,stroke:#212529,stroke-width:1px,color:#212529;
     classDef apiServer fill:#ffffff,stroke:#0ca678,stroke-width:3px,color:#092a1d;
-    classDef tenantA fill:#ffffff,stroke:#1c7ed6,stroke-width:2.5px,color:#0b2e5c;
-    classDef tenantB fill:#ffffff,stroke:#2b8a3e,stroke-width:2.5px,color:#0b2e1b;
+    classDef tenantA fill:#edf2ff,stroke:#4c6ef5,stroke-width:2.5px,color:#101d42;
+    classDef tenantB fill:#e6fcf5,stroke:#0ca678,stroke-width:2.5px,color:#092a1d;
     classDef ns fill:#ffffff,stroke:#adb5bd,stroke-width:1.5px,stroke-dasharray: 3 3,color:#495057;
 
     subgraph Host RKE2 Cluster [Host RKE2 Cluster - Default VPC: ovn-cluster]
@@ -98,8 +98,8 @@ This diagram illustrates how the guest tenant workloads run in isolated L3 custo
 } }%%
 graph TD
     classDef default fill:#ffffff,stroke:#212529,stroke-width:1px,color:#212529;
-    classDef vpcA fill:#e6fcf5,stroke:#0ca678,stroke-width:2.5px,color:#092a1d;
-    classDef vpcB fill:#eafaf1,stroke:#2b8a3e,stroke-width:2.5px,color:#0b2e1b;
+    classDef vpcA fill:#edf2ff,stroke:#4c6ef5,stroke-width:2.5px,color:#101d42;
+    classDef vpcB fill:#e6fcf5,stroke:#0ca678,stroke-width:2.5px,color:#092a1d;
     classDef highlight fill:#fff4e6,stroke:#f76707,stroke-width:2.5px,color:#5c1d00;
 
     subgraph VPCA ["Isolated VPC: vpc-tenant-a"]
