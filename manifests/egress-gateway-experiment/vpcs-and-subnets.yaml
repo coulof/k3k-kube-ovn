@@ -29,10 +29,11 @@ spec:
   excludeIps:
   - 10.10.0.1
   gateway: 10.10.0.1
-  gatewayType: distributed
-  gatewayNode: "lima-k3k-kube-ovn"
-  natOutgoing: false
-  private: false
+  gatewayType: distributed # Distributed subnets do not use/require gatewayNode
+  namespaces:
+  - k3k-tenant-a # Restrict this subnet to Tenant A's host namespace to prevent logical_switch hijacking
+  natOutgoing: false # Outbound traffic is handled by VpcEgressGateway, not native node SNAT
+  private: false # private: false allows pods to reach the host's Kubernetes API server (10.43.0.1)
   protocol: IPv4
   provider: ovn
 
@@ -51,10 +52,11 @@ spec:
   excludeIps:
   - 10.20.0.1
   gateway: 10.20.0.1
-  gatewayType: distributed
-  gatewayNode: "lima-k3k-kube-ovn"
-  natOutgoing: false
-  private: false
+  gatewayType: distributed # Distributed subnets do not use/require gatewayNode
+  namespaces:
+  - k3k-tenant-b # Restrict this subnet to Tenant B's host namespace to prevent logical_switch hijacking
+  natOutgoing: false # Outbound traffic is handled by VpcEgressGateway, not native node SNAT
+  private: false # private: false allows pods to reach the host's Kubernetes API server (10.43.0.1)
   protocol: IPv4
   provider: ovn
 
@@ -127,9 +129,9 @@ spec:
   - 192.168.105.100
   vlan: egress-vlan
   provider: egress.kube-system.ovn
-  natOutgoing: false
+  natOutgoing: false # Outbound traffic on this subnet goes straight to underlay L2 routing
   private: false
-  u2oInterconnection: false
+  u2oInterconnection: false # Disable direct overlay-underlay routing; traffic goes through gateway SNAT instead
   vpc: ovn-cluster
 
 ---

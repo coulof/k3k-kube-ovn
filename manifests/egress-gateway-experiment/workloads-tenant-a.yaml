@@ -2,6 +2,11 @@
 # Purpose: Declarative workloads for Tenant A to verify egress IP aggregation
 
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-a
+---
+apiVersion: v1
 kind: Pod
 metadata:
   name: client-pod-1
