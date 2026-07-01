@@ -64,7 +64,7 @@ sequenceDiagram
 
     Guest->>RKE2: Starts with CNI disabled
     Note over RKE2: Nodes are NotReady<br/>Pods/Jobs cannot schedule
-    Guest->>OVS: Loads openvswitch kernel modules
+    Guest->>OVS: Loads openvswitch & geneve kernel modules
     Guest->>RKE2: Imperatively runs 'helm install kube-ovn'
     OVS->>RKE2: Provisions virtual OVS interfaces & bridges
     Note over RKE2: Nodes transition to Ready<br/>Pod network is active
@@ -74,7 +74,7 @@ sequenceDiagram
 
 1. **The Chicken-and-Egg Deadlock:** RKE2 starts with `cni: none` [lima/k3k-kube-ovn.yaml:L57](lima/k3k-kube-ovn.yaml#L57). Because there is no active CNI, nodes remain in `NotReady` status. Standard controllers (including RKE2's built-in manifest processor) schedule Helm chart deployments as standard Kubernetes jobs/pods. If Kube-OVN were defined declaratively in the manifests directory, its installation job would wait infinitely for a network to run—creating a circular dependency.
 2. **The Resolution:** 
-   - First, the host system loads the required host-level `openvswitch` kernel module [lima/k3k-kube-ovn.yaml:L95](lima/k3k-kube-ovn.yaml#L95).
+   - First, the host system loads the required host-level `openvswitch` and `geneve` kernel modules [lima/k3k-kube-ovn.yaml:L95](lima/k3k-kube-ovn.yaml#L95).
    - Second, the provisioning script imperatively installs the Helm CLI and runs `helm install kube-ovn` [lima/k3k-kube-ovn.yaml:L124](lima/k3k-kube-ovn.yaml#L124) in the host network space.
    - Once Kube-OVN is running, the host nodes become `Ready` [lima/k3k-kube-ovn.yaml:L140](lima/k3k-kube-ovn.yaml#L140).
    - Finally, the project directory is located on the read-only host mount, and all declarative manifests (for cert-manager, k3k, and subnet annotations) are copied over to RKE2's manifest directory [lima/k3k-kube-ovn.yaml:L158-L193](lima/k3k-kube-ovn.yaml#L158-L193). They are then natively executed by RKE2's built-in deploy controller.
